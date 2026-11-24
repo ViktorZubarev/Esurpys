@@ -1,7 +1,6 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useState } from "react";
 import EsurpysNavigation from "@/shared/EsurpysNavigation";
 import { useLanguage } from "@/shared/LanguageProvider";
 
@@ -158,14 +157,8 @@ export default function AboutPage() {
   const { language } = useLanguage();
   const t = content[language];
 
-  const [currentYear, setCurrentYear] = useState<number | null>(null);
-
-  useEffect(() => {
-    setCurrentYear(new Date().getFullYear());
-  }, []);
-
   return (
-    <main className="min-h-screen overflow-hidden bg-[#080b14] text-white">
+    <main className="min-h-screen overflow-hidden bg-slate-950 text-white">
       <EsurpysNavigation />
 
       {/* Hero */}
@@ -220,7 +213,7 @@ export default function AboutPage() {
       </section>
 
       {/* What is Esurpys */}
-      <section className="border-y border-white/10 bg-[#0d1321]">
+      <section className="border-y border-white/10 bg-slate-900/40">
         <div className="mx-auto grid max-w-7xl gap-12 px-6 py-24 sm:px-8 lg:grid-cols-2 lg:items-center">
           <div>
             <p className="text-sm font-semibold tracking-[0.25em] text-cyan-400">
@@ -235,9 +228,8 @@ export default function AboutPage() {
             <p className="mt-5 leading-8 text-slate-500">{t.whatText2}</p>
           </div>
 
-          <div className="relative overflow-hidden rounded-3xl border border-cyan-400/15 bg-gradient-to-br from-blue-950/70 via-[#111a30] to-[#101827] p-8 sm:p-12">
+          <div className="relative overflow-hidden rounded-3xl border border-cyan-400/15 bg-gradient-to-br from-slate-900 via-slate-900/90 to-cyan-950/30 p-8 sm:p-12">
             <div className="absolute -right-16 -top-16 h-56 w-56 rounded-full bg-cyan-400/10 blur-3xl" />
-
             <div className="relative">
               <div className="text-6xl">🌐</div>
               <h3 className="mt-8 text-3xl font-bold">
@@ -269,7 +261,7 @@ export default function AboutPage() {
           {directions.map((item, index) => (
             <article
               key={item.title}
-              className="group rounded-3xl border border-white/10 bg-[#101522] p-8 transition duration-300 hover:-translate-y-1 hover:border-cyan-400/30 hover:bg-[#131c2d]"
+              className="group rounded-3xl border border-white/10 bg-slate-900/70 p-8 transition duration-300 hover:-translate-y-1 hover:border-cyan-400/30 hover:bg-slate-900"
             >
               <div className="flex items-center justify-between">
                 <span className="text-4xl">{item.icon}</span>
@@ -277,11 +269,9 @@ export default function AboutPage() {
                   0{index + 1}
                 </span>
               </div>
-
               <h3 className="mt-8 text-xl font-bold transition group-hover:text-cyan-300">
                 {t[item.title]}
               </h3>
-
               <p className="mt-4 leading-8 text-slate-400">
                 {t[item.text]}
               </p>
@@ -291,12 +281,11 @@ export default function AboutPage() {
       </section>
 
       {/* Principles */}
-      <section className="border-y border-white/10 bg-[#0d1321]">
+      <section className="border-y border-white/10 bg-slate-900/40">
         <div className="mx-auto max-w-7xl px-6 py-24 sm:px-8">
           <p className="text-sm font-semibold tracking-[0.25em] text-cyan-400">
             {t.principlesLabel}
           </p>
-
           <h2 className="mt-5 text-3xl font-bold sm:text-4xl">
             {t.principlesTitle}
           </h2>
@@ -310,9 +299,7 @@ export default function AboutPage() {
                 <span className="text-sm font-semibold text-cyan-400">
                   {item.number}
                 </span>
-
                 <h3 className="mt-4 text-xl font-bold">{t[item.title]}</h3>
-
                 <p className="mt-3 leading-8 text-slate-400">
                   {t[item.text]}
                 </p>
@@ -329,7 +316,6 @@ export default function AboutPage() {
             <p className="text-sm font-semibold tracking-[0.25em] text-cyan-400">
               {t.developmentLabel}
             </p>
-
             <h2 className="mt-5 text-3xl font-bold leading-tight sm:text-4xl">
               {t.developmentTitle}
             </h2>
@@ -343,21 +329,18 @@ export default function AboutPage() {
       </section>
 
       {/* Future */}
-      <section className="border-y border-white/10 bg-[#0d1321]">
+      <section className="border-y border-white/10 bg-slate-900/40">
         <div className="mx-auto max-w-7xl px-6 py-24 sm:px-8">
           <div className="max-w-3xl">
             <p className="text-sm font-semibold tracking-[0.25em] text-cyan-400">
               {t.visionLabel}
             </p>
-
             <h2 className="mt-5 text-3xl font-bold sm:text-4xl">
               {t.futureTitle}
             </h2>
-
             <p className="mt-7 text-lg leading-9 text-slate-400">
               {t.futureText}
             </p>
-
             <p className="mt-5 leading-8 text-slate-500">
               {t.futureText2}
             </p>
@@ -367,7 +350,7 @@ export default function AboutPage() {
 
       {/* CTA */}
       <section className="mx-auto max-w-7xl px-6 py-24 sm:px-8">
-        <div className="relative overflow-hidden rounded-3xl border border-cyan-400/20 bg-gradient-to-br from-blue-950/80 via-[#111a30] to-[#101827] px-8 py-16 text-center sm:px-16">
+        <div className="relative overflow-hidden rounded-3xl border border-cyan-400/20 bg-gradient-to-br from-slate-900 via-slate-900/90 to-cyan-950/30 px-8 py-16 text-center sm:px-16">
           <div className="pointer-events-none absolute -right-20 -top-32 h-80 w-80 rounded-full bg-cyan-400/10 blur-3xl" />
           <div className="pointer-events-none absolute -bottom-32 -left-20 h-80 w-80 rounded-full bg-blue-500/10 blur-3xl" />
 
@@ -375,11 +358,9 @@ export default function AboutPage() {
             <h2 className="text-3xl font-bold sm:text-4xl">
               {t.ctaTitle}
             </h2>
-
             <p className="mx-auto mt-5 max-w-2xl leading-8 text-slate-400">
               {t.ctaText}
             </p>
-
             <Link
               href="/"
               className="mt-9 inline-flex items-center rounded-full bg-cyan-400 px-8 py-4 font-semibold text-slate-950 transition hover:bg-cyan-300"

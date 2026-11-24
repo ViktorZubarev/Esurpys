@@ -5,7 +5,7 @@ import {
   useCallback,
   useContext,
   useEffect,
-  useState,
+  useSyncExternalStore,
   type ReactNode,
 } from "react";
 
@@ -17,49 +17,53 @@ type LanguageContextType = {
 };
 
 const LanguageContext = createContext<LanguageContextType | null>(null);
+const LANGUAGE_STORAGE_KEY = "esurpys-language";
+const LANGUAGE_CHANGE_EVENT = "esurpys-language-change";
+
+function subscribeToLanguage(callback: () => void) {
+  function handleStorage(event: StorageEvent) {
+    if (event.key === null || event.key === LANGUAGE_STORAGE_KEY) {
+      callback();
+    }
+  }
+
+  window.addEventListener(LANGUAGE_CHANGE_EVENT, callback);
+  window.addEventListener("storage", handleStorage);
+
+  return () => {
+    window.removeEventListener(LANGUAGE_CHANGE_EVENT, callback);
+    window.removeEventListener("storage", handleStorage);
+  };
+}
+
+function getLanguageSnapshot(): Language {
+  const saved = localStorage.getItem(LANGUAGE_STORAGE_KEY);
+  return saved === "ru" ? "ru" : "en";
+}
+
+function getServerLanguageSnapshot(): Language {
+  return "en";
+}
 
 export function LanguageProvider({
   children,
 }: {
   children: ReactNode;
 }) {
-  const [language, setLanguageState] = useState<Language>("en");
+  const language = useSyncExternalStore(
+    subscribeToLanguage,
+    getLanguageSnapshot,
+    getServerLanguageSnapshot
+  );
 
   useEffect(() => {
-    const saved = localStorage.getItem("esurpys-language");
-
-    if (saved === "en" || saved === "ru") {
-      setLanguageState(saved);
-    }
-
-    function syncLanguage(event: Event) {
-      const nextLanguage = (event as CustomEvent<Language>).detail;
-
-      if (nextLanguage === "en" || nextLanguage === "ru") {
-        setLanguageState(nextLanguage);
-      }
-    }
-
-    function syncStorage(event: StorageEvent) {
-      if (event.key !== "esurpys-language") return;
-      setLanguageState(event.newValue === "ru" ? "ru" : "en");
-    }
-
-    window.addEventListener("esurpys-language-change", syncLanguage);
-    window.addEventListener("storage", syncStorage);
-
-    return () => {
-      window.removeEventListener("esurpys-language-change", syncLanguage);
-      window.removeEventListener("storage", syncStorage);
-    };
-  }, []);
+    document.documentElement.lang = language;
+  }, [language]);
 
   const setLanguage = useCallback((nextLanguage: Language) => {
-    setLanguageState(nextLanguage);
-    localStorage.setItem("esurpys-language", nextLanguage);
-
+    localStorage.setItem(LANGUAGE_STORAGE_KEY, nextLanguage);
     window.dispatchEvent(
-      new CustomEvent("esurpys-language-change", {
+      new CustomEvent(LANGUAGE_CHANGE_EVENT, {
         detail: nextLanguage,
       })
     );

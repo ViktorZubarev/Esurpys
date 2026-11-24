@@ -1,19 +1,11 @@
 "use client";
 
 import Link from "next/link";
-
-import { useEffect, useState } from "react";
-
 import EsurpysNavigation from "@/shared/EsurpysNavigation";
-
-type Language = "en" | "ru";
+import { useLanguage } from "@/shared/LanguageProvider";
 
 const content = {
   en: {
-    navHome: "Home",
-    navNavigator: "Visa Navigator",
-    navCountries: "Countries",
-    navAbout: "About",
     eyebrow: "YOUR JOURNEY STARTS HERE",
     title: "Your future has no borders.",
     subtitle:
@@ -50,10 +42,6 @@ const content = {
     footer: "Explore your world with Esurpys.",
   },
   ru: {
-    navHome: "Главная",
-    navNavigator: "Визовый навигатор",
-    navCountries: "Страны",
-    navAbout: "О проекте",
     eyebrow: "ТВОЙ ПУТЬ НАЧИНАЕТСЯ ЗДЕСЬ",
     title: "У твоего будущего нет границ.",
     subtitle:
@@ -91,44 +79,8 @@ const content = {
   },
 } as const;
 
-const navigation = [
-  { href: "/", key: "navHome" },
-  { href: "/navigator", key: "navNavigator" },
-  { href: "/countries", key: "navCountries" },
-  { href: "/about", key: "navAbout" },
-] as const;
-
 export default function HomePage() {
-  const [language, setLanguage] = useState<Language>("en");
-
-useEffect(() => {
-  const savedLanguage = localStorage.getItem("esurpys-language");
-
-  if (savedLanguage === "en" || savedLanguage === "ru") {
-    setLanguage(savedLanguage);
-  }
-
-  function handleLanguageChange(event: Event) {
-    const nextLanguage = (event as CustomEvent<Language>).detail;
-
-    if (nextLanguage === "en" || nextLanguage === "ru") {
-      setLanguage(nextLanguage);
-    }
-  }
-
-  window.addEventListener(
-    "esurpys-language-change",
-    handleLanguageChange
-  );
-
-  return () => {
-    window.removeEventListener(
-      "esurpys-language-change",
-      handleLanguageChange
-    );
-  };
-}, []);
-
+  const { language } = useLanguage();
   const t = content[language];
 
   const cards = [
@@ -176,24 +128,21 @@ useEffect(() => {
             <p className="mb-6 text-xs font-bold uppercase tracking-[0.24em] text-cyan-400">
               {t.eyebrow}
             </p>
-
             <h1 className="max-w-3xl text-5xl font-bold leading-[1.08] tracking-tight sm:text-6xl lg:text-7xl">
               {t.title}
             </h1>
-
             <p className="mt-7 max-w-2xl text-base leading-8 text-slate-400 sm:text-lg">
               {t.subtitle}
             </p>
 
             <div className="mt-9 flex flex-wrap gap-4">
-              <a
+              <Link
                 href="/navigator"
                 className="inline-flex items-center justify-center gap-2 rounded-xl bg-cyan-400 px-6 py-3.5 font-semibold text-slate-950 transition hover:bg-cyan-300"
               >
                 {t.primaryCta}
                 <span aria-hidden="true">→</span>
-              </a>
-
+              </Link>
               <Link
                 href="/countries"
                 className="inline-flex items-center justify-center rounded-xl border border-white/15 bg-white/[0.03] px-6 py-3.5 font-semibold text-white transition hover:border-cyan-400/50 hover:bg-white/[0.06]"
@@ -211,14 +160,11 @@ useEffect(() => {
 
           <div className="relative mx-auto w-full max-w-lg">
             <div className="absolute inset-0 rounded-[2rem] bg-cyan-400/10 blur-2xl" />
-
             <div className="relative rounded-[2rem] border border-white/10 bg-slate-900/80 p-6 shadow-2xl sm:p-8">
               <div className="flex items-center justify-between border-b border-white/10 pb-5">
                 <div>
                   <p className="text-sm text-slate-400">
-                    {language === "en"
-                      ? "Your next chapter"
-                      : "Твоя следующая глава"}
+                    {language === "en" ? "Your next chapter" : "Твоя следующая глава"}
                   </p>
                   <h2 className="mt-1 text-xl font-semibold">
                     {language === "en"
@@ -236,9 +182,7 @@ useEffect(() => {
                   {
                     number: "01",
                     title:
-                      language === "en"
-                        ? "Tell us about yourself"
-                        : "Расскажи о себе",
+                      language === "en" ? "Tell us about yourself" : "Расскажи о себе",
                     description:
                       language === "en"
                         ? "Your skills, experience and goals"
@@ -284,13 +228,13 @@ useEffect(() => {
                 ))}
               </div>
 
-              <a
+              <Link
                 href="/navigator"
                 className="mt-5 flex w-full items-center justify-between rounded-xl border border-cyan-400/20 bg-cyan-400/5 px-4 py-3 text-sm font-semibold text-cyan-300 transition hover:bg-cyan-400/10"
               >
                 {t.navigatorButton}
                 <span aria-hidden="true">→</span>
-              </a>
+              </Link>
             </div>
           </div>
         </div>
@@ -312,32 +256,16 @@ useEffect(() => {
 
           <div className="mt-12 grid gap-5 md:grid-cols-3">
             {[
-              {
-                number: "01",
-                title: t.feature1Title,
-                description: t.feature1Text,
-              },
-              {
-                number: "02",
-                title: t.feature2Title,
-                description: t.feature2Text,
-              },
-              {
-                number: "03",
-                title: t.feature3Title,
-                description: t.feature3Text,
-              },
+              { number: "01", title: t.feature1Title, description: t.feature1Text },
+              { number: "02", title: t.feature2Title, description: t.feature2Text },
+              { number: "03", title: t.feature3Title, description: t.feature3Text },
             ].map((feature) => (
               <div
                 key={feature.number}
                 className="rounded-2xl border border-white/10 bg-slate-950/60 p-6"
               >
-                <p className="text-sm font-bold text-cyan-400">
-                  {feature.number}
-                </p>
-                <h3 className="mt-5 text-xl font-semibold">
-                  {feature.title}
-                </h3>
+                <p className="text-sm font-bold text-cyan-400">{feature.number}</p>
+                <h3 className="mt-5 text-xl font-semibold">{feature.title}</h3>
                 <p className="mt-3 text-sm leading-7 text-slate-400">
                   {feature.description}
                 </p>
@@ -351,7 +279,7 @@ useEffect(() => {
         <div className="flex flex-col justify-between gap-4 sm:flex-row sm:items-end">
           <div>
             <p className="text-xs font-bold uppercase tracking-[0.2em] text-cyan-400">
-              {language === "en" ? "EXPLORE ESPURYS" : "ИЗУЧАЙ ESPURYS"}
+              {language === "en" ? "EXPLORE ESURPYS" : "ИЗУЧАЙ ESURPYS"}
             </p>
             <h2 className="mt-3 text-3xl font-bold tracking-tight sm:text-4xl">
               {language === "en"
@@ -368,7 +296,7 @@ useEffect(() => {
 
         <div className="mt-10 grid gap-5 lg:grid-cols-3">
           {cards.map((card) => (
-            <a
+            <Link
               key={card.href}
               href={card.href}
               className={`group flex min-h-72 flex-col rounded-2xl border p-6 transition duration-200 hover:-translate-y-1 ${
@@ -393,22 +321,23 @@ useEffect(() => {
               </div>
 
               <h3 className="mt-6 text-xl font-semibold">{card.title}</h3>
-
               <p className="mt-3 flex-1 text-sm leading-7 text-slate-400">
                 {card.description}
               </p>
 
               <div className="mt-6 flex items-center justify-between text-sm font-semibold text-cyan-300">
                 <span>{card.button}</span>
-                <span className="transition group-hover:translate-x-1" aria-hidden="true">
+                <span
+                  className="transition group-hover:translate-x-1"
+                  aria-hidden="true"
+                >
                   →
                 </span>
               </div>
-            </a>
+            </Link>
           ))}
         </div>
       </section>
-
     </main>
   );
 }

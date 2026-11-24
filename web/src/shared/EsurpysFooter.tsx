@@ -1,27 +1,9 @@
 "use client";
 
-import { useEffect, useState } from "react";
-
-type Language = "en" | "ru";
+import { useLanguage } from "@/shared/LanguageProvider";
 
 export default function EsurpysFooter() {
-  const [language, setLanguage] = useState<Language>("en");
-
-  useEffect(() => {
-    function syncLanguage() {
-      const saved = localStorage.getItem("esurpys-language");
-      if (saved === "en" || saved === "ru") {
-        setLanguage(saved);
-      }
-    }
-
-    syncLanguage();
-    window.addEventListener("esurpys-language-change", syncLanguage);
-
-    return () => {
-      window.removeEventListener("esurpys-language-change", syncLanguage);
-    };
-  }, []);
+  const { language } = useLanguage();
 
   return (
     <footer className="border-t border-white/10 bg-slate-900/30">

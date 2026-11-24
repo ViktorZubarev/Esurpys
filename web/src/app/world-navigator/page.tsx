@@ -1,8 +1,15 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import Link from "next/link";
+import { useEffect, useMemo, useState } from "react";
 import EsurpysNavigation from "@/shared/EsurpysNavigation";
 import { useLanguage } from "@/shared/LanguageProvider";
+import VisaAiAdvisor from "@/components/VisaAiAdvisor";
+import {
+  clearWorldProfile,
+  loadWorldProfile,
+  saveWorldProfile,
+} from "@/lib/shared-profile";
 
 type Answer = string;
 
@@ -28,6 +35,7 @@ type Country = {
   description: string;
   descriptionRu: string;
   website: string;
+  quizHref?: string;
   pathways: string[];
   pathwaysRu: string[];
   requirements: Partial<Record<string, string[]>>;
@@ -39,7 +47,21 @@ type Assessment = {
   matched: string[];
   concerns: string[];
   missing: string[];
+  citizenshipNote?: string;
 };
+
+const EU_EEA_CITIZENSHIPS = new Set([
+  "latvia",
+  "lithuania",
+  "estonia",
+  "poland",
+  "netherlands",
+  "germany",
+  "france",
+  "eu",
+]);
+
+const EU_DESTINATIONS = new Set(["germany", "netherlands", "ireland"]);
 
 const QUESTIONS: Question[] = [
   {
@@ -98,25 +120,12 @@ const QUESTIONS: Question[] = [
       { value: "kazakhstan", label: "Kazakhstan", labelRu: "Казахстан" },
       { value: "uzbekistan", label: "Uzbekistan", labelRu: "Узбекистан" },
       { value: "armenia", label: "Armenia", labelRu: "Армения" },
-      { value: "azerbaijan", label: "Azerbaijan", labelRu: "Азербайджан" },
       { value: "georgia", label: "Georgia", labelRu: "Грузия" },
-      { value: "moldova", label: "Moldova", labelRu: "Молдова" },
-      { value: "kyrgyzstan", label: "Kyrgyzstan", labelRu: "Кыргызстан" },
-      { value: "tajikistan", label: "Tajikistan", labelRu: "Таджикистан" },
-      { value: "turkmenistan", label: "Turkmenistan", labelRu: "Туркменистан" },
-      { value: "latvia", label: "Latvia", labelRu: "Латвия" },
-      { value: "lithuania", label: "Lithuania", labelRu: "Литва" },
-      { value: "estonia", label: "Estonia", labelRu: "Эстония" },
-      { value: "poland", label: "Poland", labelRu: "Польша" },
-      { value: "netherlands", label: "Netherlands", labelRu: "Нидерланды" },
-      { value: "germany", label: "Germany", labelRu: "Германия" },
-      { value: "france", label: "France", labelRu: "Франция" },
-      { value: "eu", label: "Other EU / EEA country", labelRu: "Другая страна ЕС / ЕЭЗ" },
+      { value: "eu", label: "EU / EEA country", labelRu: "Страна ЕС / ЕЭЗ" },
       { value: "uk", label: "United Kingdom", labelRu: "Великобритания" },
       { value: "us", label: "United States", labelRu: "США" },
       { value: "canada", label: "Canada", labelRu: "Канада" },
       { value: "australia", label: "Australia", labelRu: "Австралия" },
-      { value: "new-zealand", label: "New Zealand", labelRu: "Новая Зеландия" },
       { value: "other", label: "Other country", labelRu: "Другая страна" },
     ],
   },
@@ -196,8 +205,8 @@ const QUESTIONS: Question[] = [
   },
   {
     id: "study",
-    label: "Would you consider studying abroad?",
-    labelRu: "Рассматриваете ли вы учёбу за границей?",
+    label: "Would you consider studying abroad as an immigration pathway?",
+    labelRu: "Рассматриваете ли вы учёбу за границей как вариант переезда?",
     options: [
       { value: "yes", label: "Yes", labelRu: "Да" },
       { value: "maybe", label: "Maybe", labelRu: "Возможно" },
@@ -206,12 +215,12 @@ const QUESTIONS: Question[] = [
   },
   {
     id: "family",
-    label: "Do you have a qualifying close family member in another country?",
-    labelRu: "Есть ли у вас близкий родственник или партнёр в другой стране?",
+    label: "Do you have a qualifying close family member abroad?",
+    labelRu: "Есть ли у вас близкий родственник или партнёр за границей?",
     options: [
-      { value: "yes", label: "Yes", labelRu: "Да, есть близкий родственник" },
-      { value: "no", label: "No", labelRu: "Нет" },
+      { value: "yes", label: "Yes, close relative", labelRu: "Да, есть близкий родственник" },
       { value: "partner", label: "Spouse / partner abroad", labelRu: "Супруг, супруга или партнёр за границей" },
+      { value: "no", label: "No", labelRu: "Нет" },
       { value: "unknown", label: "Not sure if eligible", labelRu: "Не знаю, подходит ли мой случай" },
     ],
   },
@@ -249,6 +258,7 @@ const COUNTRIES: Country[] = [
     description: "Skilled-worker, provincial, study and family immigration routes.",
     descriptionRu: "Иммиграция квалифицированных специалистов, провинциальные программы, учёба и воссоединение семьи.",
     website: "https://www.canada.ca/en/immigration-refugees-citizenship.html",
+    quizHref: "/ca",
     pathways: [
       "Express Entry and eligible economic programs",
       "Provincial nominee programs",
@@ -262,9 +272,114 @@ const COUNTRIES: Country[] = [
       "Семейное спонсорство при соблюдении требований",
     ],
     requirements: {
-      goal: ["work", "study", "family", "permanent"],
+      goal: ["work", "study", "family", "permanent", "business"],
       age: ["18-29", "30-35", "36-44"],
-      job: ["offer", "skilled"],
+      job: ["offer", "skilled", "business"],
+      education: ["vocational", "bachelor", "master", "phd"],
+      language: ["intermediate", "advanced", "native"],
+      funds: ["medium", "high", "sponsor"],
+      study: ["yes", "maybe"],
+      family: ["yes", "partner"],
+      experience: ["2-5", "5plus"],
+      duration: ["years", "permanent"],
+    },
+  },
+  {
+    id: "germany",
+    name: "Germany",
+    flag: "🇩🇪",
+    region: "Europe",
+    regionRu: "Европа",
+    description: "Employment, EU Blue Card, Opportunity Card, vocational training, study and family routes.",
+    descriptionRu: "Работа, Голубая карта ЕС, Карта возможностей, профессиональное обучение, учёба и воссоединение семьи.",
+    website: "https://www.make-it-in-germany.com/en/",
+    quizHref: "/de",
+    pathways: [
+      "EU Blue Card if salary and qualification criteria are met",
+      "Skilled-worker residence permits",
+      "Opportunity Card (Chancenkarte) for job search",
+      "Study, Ausbildung and family routes",
+    ],
+    pathwaysRu: [
+      "Голубая карта ЕС при выполнении требований к зарплате и квалификации",
+      "ВНЖ для квалифицированных специалистов",
+      "Карта возможностей для поиска работы",
+      "Учёба, Ausbildung и семейные программы",
+    ],
+    requirements: {
+      goal: ["work", "study", "family", "permanent", "business"],
+      age: ["18-29", "30-35", "36-44", "45plus"],
+      job: ["offer", "skilled", "business", "remote"],
+      education: ["vocational", "bachelor", "master", "phd"],
+      language: ["basic", "intermediate", "advanced", "native"],
+      funds: ["medium", "high", "sponsor"],
+      study: ["yes", "maybe"],
+      family: ["yes", "partner"],
+      experience: ["under2", "2-5", "5plus"],
+      duration: ["years", "permanent", "temporary"],
+    },
+  },
+  {
+    id: "netherlands",
+    name: "Netherlands",
+    flag: "🇳🇱",
+    region: "Europe",
+    regionRu: "Европа",
+    description: "Highly skilled migrant, EU Blue Card, startup, study and family routes.",
+    descriptionRu: "ВНЖ для высококвалифицированных мигрантов (HSM), Голубая карта ЕС, стартап-виза, учёба и семья.",
+    website: "https://ind.nl/en",
+    quizHref: "/nl",
+    pathways: [
+      "Highly Skilled Migrant route with a recognised sponsor",
+      "EU Blue Card where criteria are met",
+      "Orientation Year / Startup visa",
+      "Partner and family residence",
+    ],
+    pathwaysRu: [
+      "ВНЖ высококвалифицированного мигранта через признанного спонсора",
+      "Голубая карта ЕС при соблюдении требований",
+      "Orientation Year или стартап-виза",
+      "ВНЖ для партнёров и членов семьи",
+    ],
+    requirements: {
+      goal: ["work", "study", "family", "permanent", "business"],
+      age: ["18-29", "30-35", "36-44", "45plus"],
+      job: ["offer", "skilled", "business"],
+      education: ["bachelor", "master", "phd"],
+      language: ["basic", "intermediate", "advanced", "native"],
+      funds: ["medium", "high", "sponsor"],
+      study: ["yes", "maybe"],
+      family: ["yes", "partner"],
+      experience: ["2-5", "5plus"],
+      duration: ["years", "permanent"],
+    },
+  },
+  {
+    id: "uk",
+    name: "United Kingdom",
+    flag: "🇬🇧",
+    region: "Europe",
+    regionRu: "Европа",
+    description: "Skilled Worker, Global Talent, Innovator Founder, study and family routes.",
+    descriptionRu: "Виза Skilled Worker, Global Talent, Innovator Founder, учебные и семейные маршруты.",
+    website: "https://www.gov.uk/government/organisations/uk-visas-and-immigration",
+    quizHref: "/uk",
+    pathways: [
+      "Skilled Worker visa with a licensed UK sponsor",
+      "Global Talent / High Potential Individual",
+      "Student visa and Graduate route",
+      "Family visas where criteria are met",
+    ],
+    pathwaysRu: [
+      "Виза квалифицированного работника при наличии спонсора",
+      "Global Talent и High Potential Individual",
+      "Студенческая виза и Graduate route",
+      "Семейные визы при соблюдении требований",
+    ],
+    requirements: {
+      goal: ["work", "study", "family", "permanent", "business"],
+      age: ["18-29", "30-35", "36-44", "45plus"],
+      job: ["offer", "skilled", "business"],
       education: ["vocational", "bachelor", "master", "phd"],
       language: ["intermediate", "advanced", "native"],
       funds: ["medium", "high", "sponsor"],
@@ -280,19 +395,20 @@ const COUNTRIES: Country[] = [
     flag: "🇦🇺",
     region: "Oceania",
     regionRu: "Океания",
-    description: "Skilled migration, employer sponsorship, study and family visa pathways.",
-    descriptionRu: "Квалифицированная иммиграция, спонсорство работодателя, учёба и семейные визы.",
+    description: "Skilled migration (189/190/491), employer sponsorship (482), study and partner visas.",
+    descriptionRu: "Балльная иммиграция (189/190/491), спонсорство работодателя (482), учёба и визы партнёров.",
     website: "https://immi.homeaffairs.gov.au/",
+    quizHref: "/au",
     pathways: [
-      "Points-tested skilled migration, if eligible",
-      "Employer-sponsored visas",
-      "Student visas and eligible subsequent options",
+      "Points-tested skilled migration (189/190/491, under age 45)",
+      "Employer-sponsored visas (Subclass 482 / 186)",
+      "Student visas and Post-Study Work options",
       "Family and partner visas",
     ],
     pathwaysRu: [
-      "Балльные программы для специалистов при соответствии критериям",
-      "Визы при спонсорстве работодателя",
-      "Студенческие визы и возможные дальнейшие варианты",
+      "Балльные программы 189/190/491 (возраст до 45 лет)",
+      "Рабочие визы через спонсора (482 / 186)",
+      "Студенческие визы и варианты после выпуска",
       "Семейные визы и визы партнёров",
     ],
     requirements: {
@@ -309,69 +425,38 @@ const COUNTRIES: Country[] = [
     },
   },
   {
-    id: "new-zealand",
-    name: "New Zealand",
-    flag: "🇳🇿",
-    region: "Oceania",
-    regionRu: "Океания",
-    description: "Work, employer-linked, study and family routes subject to current criteria.",
-    descriptionRu: "Рабочие визы, варианты через работодателя, учёба и семейные категории при соблюдении требований.",
-    website: "https://www.immigration.govt.nz/",
+    id: "usa",
+    name: "United States",
+    flag: "🇺🇸",
+    region: "North America",
+    regionRu: "Северная Америка",
+    description: "H-1B, O-1, EB-2 NIW, E-2 treaty investor, study and family immigration categories.",
+    descriptionRu: "Категории H-1B, O-1, EB-2 NIW, E-2, учебные визы и семейная иммиграция.",
+    website: "https://www.uscis.gov/",
+    quizHref: "/us",
     pathways: [
-      "Accredited-employer work routes",
-      "Eligible skilled residence pathways",
-      "Student visas",
-      "Partner and family visas",
+      "Employer-sponsored categories (H-1B, L-1) or O-1 / EB-2 NIW",
+      "Family-based immigration, if eligible",
+      "Student visas (F-1) with OPT",
+      "E-2 / EB-5 business & investment routes",
     ],
     pathwaysRu: [
-      "Рабочие визы через аккредитованного работодателя",
-      "Программы проживания для квалифицированных специалистов",
-      "Студенческие визы",
-      "Визы партнёров и членов семьи",
+      "Рабочие визы H-1B / L-1 или O-1 / EB-2 NIW",
+      "Семейная иммиграция при наличии права",
+      "Студенческая виза F-1 с практикой OPT",
+      "Бизнес и инвестиции (E-2 для стран договора / EB-5)",
     ],
     requirements: {
-      goal: ["work", "study", "family", "permanent"],
-      job: ["offer", "skilled"],
-      education: ["vocational", "bachelor", "master", "phd"],
+      goal: ["work", "study", "family", "permanent", "business"],
+      age: ["18-29", "30-35", "36-44", "45plus"],
+      job: ["offer", "skilled", "business"],
+      education: ["bachelor", "master", "phd"],
       language: ["intermediate", "advanced", "native"],
       funds: ["medium", "high", "sponsor"],
       study: ["yes", "maybe"],
       family: ["yes", "partner"],
       experience: ["2-5", "5plus"],
-      duration: ["years", "permanent"],
-    },
-  },
-  {
-    id: "germany",
-    name: "Germany",
-    flag: "🇩🇪",
-    region: "Europe",
-    regionRu: "Европа",
-    description: "Employment, EU Blue Card, vocational training, study and family routes.",
-    descriptionRu: "Работа, Голубая карта ЕС, профессиональное обучение, учёба и воссоединение семьи.",
-    website: "https://www.make-it-in-germany.com/en/",
-    pathways: [
-      "EU Blue Card if salary and qualification criteria are met",
-      "Skilled-worker residence permits",
-      "Opportunity Card, if eligible",
-      "Study, vocational training and family routes",
-    ],
-    pathwaysRu: [
-      "Голубая карта ЕС при выполнении требований к зарплате и квалификации",
-      "ВНЖ для квалифицированных специалистов",
-      "Карта возможностей при соответствии критериям",
-      "Учёба, профессиональное обучение и семейные программы",
-    ],
-    requirements: {
-      goal: ["work", "study", "family", "permanent"],
-      job: ["offer", "skilled", "business"],
-      education: ["vocational", "bachelor", "master", "phd"],
-      language: ["basic", "intermediate", "advanced", "native"],
-      funds: ["medium", "high", "sponsor"],
-      study: ["yes", "maybe"],
-      family: ["yes", "partner"],
-      experience: ["2-5", "5plus"],
-      duration: ["years", "permanent"],
+      duration: ["years", "permanent", "temporary"],
     },
   },
   {
@@ -380,8 +465,8 @@ const COUNTRIES: Country[] = [
     flag: "🇮🇪",
     region: "Europe",
     regionRu: "Европа",
-    description: "Employment permits, study and family immigration options.",
-    descriptionRu: "Разрешения на работу, учёба и варианты иммиграции через семью.",
+    description: "Critical Skills employment permits, study and family immigration options.",
+    descriptionRu: "Разрешения на работу Critical Skills, учёба и семейная иммиграция.",
     website: "https://www.irishimmigration.ie/",
     pathways: [
       "Critical Skills Employment Permit",
@@ -390,13 +475,14 @@ const COUNTRIES: Country[] = [
       "Family reunification where permitted",
     ],
     pathwaysRu: [
-      "Разрешение на работу для специалистов востребованных профессий",
+      "Разрешение Critical Skills Employment Permit",
       "Общее разрешение на работу при соблюдении требований",
       "Учебные программы",
       "Воссоединение семьи в предусмотренных случаях",
     ],
     requirements: {
       goal: ["work", "study", "family", "permanent"],
+      age: ["18-29", "30-35", "36-44", "45plus"],
       job: ["offer", "skilled"],
       education: ["vocational", "bachelor", "master", "phd"],
       language: ["intermediate", "advanced", "native"],
@@ -408,94 +494,29 @@ const COUNTRIES: Country[] = [
     },
   },
   {
-    id: "netherlands",
-    name: "Netherlands",
-    flag: "🇳🇱",
-    region: "Europe",
-    regionRu: "Европа",
-    description: "Highly skilled migrant, EU Blue Card, study and family routes.",
-    descriptionRu: "ВНЖ для высококвалифицированных мигрантов, Голубая карта ЕС, учёба и семейные программы.",
-    website: "https://ind.nl/en",
+    id: "new-zealand",
+    name: "New Zealand",
+    flag: "🇳🇿",
+    region: "Oceania",
+    regionRu: "Океания",
+    description: "Accredited employer work, Straight to Residence, study and family routes.",
+    descriptionRu: "Рабочие визы через аккредитованного работодателя, Green List, учёба и семья.",
+    website: "https://www.immigration.govt.nz/",
     pathways: [
-      "Highly skilled migrant route with a qualifying sponsor",
-      "EU Blue Card where criteria are met",
-      "Study and eligible subsequent routes",
-      "Partner and family residence",
+      "Accredited Employer Work Visa (AEWV)",
+      "Skilled Migrant & Green List residence pathways",
+      "Student visas",
+      "Partner and family visas",
     ],
     pathwaysRu: [
-      "ВНЖ высококвалифицированного мигранта через подходящего спонсора",
-      "Голубая карта ЕС при соблюдении требований",
-      "Учёба и доступные дальнейшие варианты",
-      "ВНЖ для партнёров и членов семьи",
+      "Рабочая виза AEWV через аккредитованного работодателя",
+      "Программы ВНЖ для специалистов (Skilled Migrant / Green List)",
+      "Студенческие визы",
+      "Визы партнёров и членов семьи",
     ],
     requirements: {
       goal: ["work", "study", "family", "permanent"],
-      job: ["offer", "skilled"],
-      education: ["vocational", "bachelor", "master", "phd"],
-      language: ["basic", "intermediate", "advanced", "native"],
-      funds: ["medium", "high", "sponsor"],
-      study: ["yes", "maybe"],
-      family: ["yes", "partner"],
-      experience: ["2-5", "5plus"],
-      duration: ["years", "permanent"],
-    },
-  },
-  {
-    id: "usa",
-    name: "United States",
-    flag: "🇺🇸",
-    region: "North America",
-    regionRu: "Северная Америка",
-    description: "Employment, study, family and other immigration categories with distinct legal requirements.",
-    descriptionRu: "Рабочие, учебные, семейные и другие иммиграционные категории с разными юридическими требованиями.",
-    website: "https://www.uscis.gov/",
-    pathways: [
-      "Employer-sponsored employment categories",
-      "Family-based immigration, if eligible",
-      "Student visas through the appropriate process",
-      "Other categories where their specific requirements are met",
-    ],
-    pathwaysRu: [
-      "Рабочие категории при спонсорстве работодателя",
-      "Семейная иммиграция при соблюдении условий",
-      "Студенческие визы через соответствующую процедуру",
-      "Другие категории при выполнении их конкретных требований",
-    ],
-    requirements: {
-      goal: ["work", "study", "family", "permanent"],
-      job: ["offer", "skilled", "business"],
-      education: ["bachelor", "master", "phd"],
-      language: ["intermediate", "advanced", "native"],
-      funds: ["medium", "high", "sponsor"],
-      study: ["yes", "maybe"],
-      family: ["yes", "partner"],
-      experience: ["2-5", "5plus"],
-      duration: ["years", "permanent"],
-    },
-  },
-  {
-    id: "uk",
-    name: "United Kingdom",
-    flag: "🇬🇧",
-    region: "Europe",
-    regionRu: "Европа",
-    description: "Work, study, family and other routes governed by UK immigration rules.",
-    descriptionRu: "Рабочие, учебные, семейные и другие программы по иммиграционным правилам Великобритании.",
-    website: "https://www.gov.uk/government/organisations/uk-visas-and-immigration",
-    pathways: [
-      "Skilled Worker visa with a qualifying job and sponsor",
-      "Student visa and eligible subsequent routes",
-      "Family visas where criteria are met",
-      "Other specific visa routes, depending on circumstances",
-    ],
-    pathwaysRu: [
-      "Виза квалифицированного работника при наличии подходящей работы и спонсора",
-      "Студенческая виза и доступные дальнейшие варианты",
-      "Семейные визы при соблюдении требований",
-      "Другие визовые программы в зависимости от обстоятельств",
-    ],
-    requirements: {
-      goal: ["work", "study", "family", "permanent"],
+      age: ["18-29", "30-35", "36-44"],
       job: ["offer", "skilled"],
       education: ["vocational", "bachelor", "master", "phd"],
       language: ["intermediate", "advanced", "native"],
@@ -508,21 +529,54 @@ const COUNTRIES: Country[] = [
   },
 ];
 
-const WEIGHTS: Record<string, number> = {
-  citizenship: 0,
-  age: 1,
-  residenceCountry: 0,
-  immigrationHistory: 0,
-  goal: 3,
-  job: 3,
-  education: 2,
-  language: 2,
-  funds: 2,
-  study: 1,
-  family: 3,
-  experience: 2,
-  duration: 1,
-};
+function getGoalWeights(goal?: string): Record<string, number> {
+  switch (goal) {
+    case "study":
+      return {
+        goal: 3,
+        study: 3,
+        language: 2,
+        funds: 3,
+        education: 2,
+        duration: 1,
+      };
+    case "family":
+      return {
+        goal: 3,
+        family: 4,
+        funds: 2,
+        language: 1,
+        duration: 1,
+      };
+    case "business":
+      return {
+        goal: 3,
+        job: 3,
+        funds: 3,
+        language: 1,
+        experience: 2,
+        duration: 1,
+      };
+    case "temporary":
+      return {
+        goal: 3,
+        funds: 2,
+        language: 1,
+        duration: 2,
+      };
+    default:
+      return {
+        goal: 3,
+        job: 3,
+        education: 2,
+        language: 2,
+        funds: 2,
+        experience: 2,
+        age: 1,
+        duration: 1,
+      };
+  }
+}
 
 const UI = {
   en: {
@@ -537,23 +591,24 @@ const UI = {
     results: "See my results",
     restart: "Start over",
     resultsTitle: "Your country comparison",
-    resultsSubtitle: "These are preliminary profile matches, not visa eligibility decisions or approval probabilities.",
+    resultsSubtitle: "Preliminary goal-aware profile comparison with AI advisor follow-up.",
     answered: "Answered",
     mainGoal: "Main goal",
     countries: "Countries considered",
     match: "Profile match",
-    matched: "Potentially aligned factors",
-    concerns: "Needs further review",
+    matched: "Aligned factors",
+    concerns: "Gaps or risks to check",
     missing: "Not answered",
     pathways: "Possible routes to investigate",
-    official: "Official immigration website",
+    official: "Official site",
+    deepQuiz: "Open full country quiz",
     showAll: "Show all countries",
     showLess: "Show fewer countries",
-    disclaimer: "This tool provides general information only. Immigration rules depend on nationality, visa category, documents and individual circumstances. Verify all criteria with the official immigration authority.",
+    disclaimer: "This tool provides general information only. Verify all criteria with the official immigration authority.",
     reviewTitle: "Important factors to verify",
-    reviewText: "A previous visa refusal, overstay or legal issue does not automatically disqualify you, but it may affect admissibility or require additional documents.",
+    reviewText: "Previous visa refusals, overstays, age limits, or employer sponsorship requirements can materially change your eligibility.",
     noMatch: "No matching factors identified yet.",
-    matchNote: "This score is an indicative comparison based on the questionnaire, not a legal assessment or probability of visa approval.",
+    matchNote: "Goal-weighted profile match based on your answers.",
     best: "Top profile match",
     noAnswers: "No answers yet",
     noConcerns: "No obvious mismatches flagged in the answered criteria.",
@@ -571,23 +626,24 @@ const UI = {
     results: "Показать результаты",
     restart: "Начать заново",
     resultsTitle: "Сравнение стран для вас",
-    resultsSubtitle: "Это предварительное сравнение профиля, а не юридическое заключение или вероятность одобрения визы.",
+    resultsSubtitle: "Предварительное сравнение с учётом вашей цели и бесплатным ИИ-разбором нюансов.",
     answered: "Отвечено",
     mainGoal: "Главная цель",
     countries: "Страны в сравнении",
     match: "Соответствие профиля",
-    matched: "Потенциально подходящие факторы",
-    concerns: "Требуют дополнительной проверки",
+    matched: "Подходящие факторы",
+    concerns: "На что обратить внимание",
     missing: "Без ответа",
     pathways: "Возможные варианты для изучения",
-    official: "Официальный иммиграционный сайт",
+    official: "Официальный сайт",
+    deepQuiz: "Пройти детальный тест по стране",
     showAll: "Показать все страны",
     showLess: "Показать меньше стран",
-    disclaimer: "Сервис предоставляет общую информацию. Правила зависят от гражданства, типа визы, документов и индивидуальных обстоятельств. Проверяйте требования на официальном сайте миграционного ведомства.",
+    disclaimer: "Сервис предоставляет общую информацию. Проверяйте требования на официальном сайте миграционного ведомства.",
     reviewTitle: "Что важно проверить",
-    reviewText: "Предыдущий отказ в визе, нарушение срока пребывания или юридические проблемы не всегда означают автоматический запрет, но могут повлиять на возможность получения визы и потребовать дополнительных документов.",
+    reviewText: "Отказы в визе, нарушения статуса, возрастные пороги или необходимость спонсора могут существенно изменить выбор маршрута.",
     noMatch: "Подходящие факторы пока не определены.",
-    matchNote: "Это ориентировочное сравнение ответов анкеты, а не юридическая оценка или вероятность одобрения визы.",
+    matchNote: "Оценка взвешена под выбранную вами цель переезда.",
     best: "Лучшее совпадение",
     noAnswers: "Ответов пока нет",
     noConcerns: "По заполненным ответам явных несоответствий не отмечено.",
@@ -598,52 +654,65 @@ const UI = {
 function getOptionLabel(questionId: string, value: string, lang: "en" | "ru") {
   const question = QUESTIONS.find((item) => item.id === questionId);
   const option = question?.options.find((item) => item.value === value);
-
   if (!option) return value;
   return lang === "ru" ? option.labelRu : option.label;
 }
 
 function calculateScore(
   country: Country,
-  answers: Record<string, Answer>
+  answers: Record<string, Answer>,
+  lang: "en" | "ru"
 ): Assessment {
   let earned = 0;
   let possible = 0;
-
   const matched: string[] = [];
   const concerns: string[] = [];
   const missing: string[] = [];
+  const weights = getGoalWeights(answers.goal);
+
+  const citizenship = answers.citizenship;
+  const isEuCitizen = Boolean(citizenship && EU_EEA_CITIZENSHIPS.has(citizenship));
+  let citizenshipNote: string | undefined;
+
+  if (isEuCitizen && EU_DESTINATIONS.has(country.id)) {
+    citizenshipNote =
+      lang === "ru"
+        ? "Граждане ЕС/ЕЭЗ пользуются правом свободного передвижения и работы без рабочей визы."
+        : "EU/EEA citizens benefit from free movement and work rights without a visa.";
+  } else if (citizenship === "new-zealand" && country.id === "australia") {
+    citizenshipNote =
+      lang === "ru"
+        ? "Граждане Новой Зеландии обычно въезжают и работают в Австралии по Special Category Visa (subclass 444)."
+        : "New Zealand citizens typically live and work in Australia under the Special Category Visa (subclass 444).";
+  } else if (citizenship === "uk" && country.id === "ireland") {
+    citizenshipNote =
+      lang === "ru"
+        ? "Граждане Великобритании имеют право жить и работать в Ирландии по Common Travel Area."
+        : "UK citizens have residence and work rights in Ireland under the Common Travel Area.";
+  }
 
   for (const question of QUESTIONS) {
     const { id } = question;
     const answer = answers[id];
-    const weight = WEIGHTS[id] ?? 1;
+    const weight = weights[id] ?? 0;
 
-    if (!answer) {
-      if (weight > 0) missing.push(id);
+    if (id === "immigrationHistory") {
+      if (answer === "none") matched.push(id);
+      else if (answer && answer !== "prefer_not") concerns.push(id);
       continue;
     }
 
-    // Citizenship and current residence require visa-specific rules.
-    // They are deliberately not treated as advantages or disadvantages.
-    if (id === "citizenship" || id === "residenceCountry") continue;
+    if (weight <= 0) continue;
 
-    // Immigration history requires individual legal review.
-    if (id === "immigrationHistory") {
-      if (answer === "none") {
-        matched.push(id);
-      } else if (answer !== "prefer_not") {
-        concerns.push(id);
-      }
+    if (!answer) {
+      missing.push(id);
       continue;
     }
 
     const eligibleValues = country.requirements[id];
-
-    if (!eligibleValues || weight <= 0) continue;
+    if (!eligibleValues) continue;
 
     possible += weight;
-
     if (eligibleValues.includes(answer)) {
       earned += weight;
       matched.push(id);
@@ -652,20 +721,50 @@ function calculateScore(
     }
   }
 
-  const score = possible > 0 ? Math.round((earned / possible) * 100) : 0;
+  let score = possible > 0 ? Math.round((earned / possible) * 100) : 0;
 
-  return { country, score, matched, concerns, missing };
+  if (citizenshipNote) {
+    score = Math.min(98, Math.max(score, 85));
+  }
+
+  if (
+    (country.id === "australia" || country.id === "new-zealand") &&
+    answers.age === "45plus" &&
+    answers.goal === "work" &&
+    answers.job !== "offer"
+  ) {
+    score = Math.max(10, score - 18);
+  }
+
+  if (answers.goal === "work" && answers.job === "remote" && country.id === "usa") {
+    score = Math.max(10, score - 15);
+  }
+
+  if (answers.immigrationHistory === "overstay") {
+    score = Math.max(5, score - 15);
+  } else if (answers.immigrationHistory === "criminal") {
+    score = Math.max(5, score - 22);
+  } else if (answers.immigrationHistory === "refusal") {
+    score = Math.max(10, score - 6);
+  }
+
+  return {
+    country,
+    score: Math.max(0, Math.min(100, score)),
+    matched,
+    concerns,
+    missing,
+    citizenshipNote,
+  };
 }
 
 export default function WorldNavigatorPage() {
   const { language } = useLanguage();
-
   const lang: "en" | "ru" = String(language ?? "en")
     .toLowerCase()
     .startsWith("ru")
     ? "ru"
     : "en";
-
   const t = UI[lang];
 
   const [answers, setAnswers] = useState<Record<string, Answer>>({});
@@ -673,27 +772,63 @@ export default function WorldNavigatorPage() {
   const [showAll, setShowAll] = useState(false);
   const [showResults, setShowResults] = useState(false);
 
-  const currentQuestion = QUESTIONS[step];
-  const progress = ((step + 1) / QUESTIONS.length) * 100;
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      const saved = loadWorldProfile();
+      if (Object.keys(saved).length > 0) {
+        setAnswers(saved);
+      }
+    }, 0);
+    return () => window.clearTimeout(timer);
+  }, []);
+
+  const visibleQuestions = useMemo(() => {
+    return QUESTIONS.filter((q) => {
+      if (q.id === "study" && answers.goal === "study") return false;
+      if (q.id === "duration" && answers.goal === "permanent") return false;
+      if (q.id === "job" && answers.goal === "temporary") return false;
+      if (q.id === "experience" && answers.goal === "temporary") return false;
+      return true;
+    });
+  }, [answers.goal]);
+
+  const safeStep = Math.min(step, Math.max(0, visibleQuestions.length - 1));
+  const currentQuestion = visibleQuestions[safeStep];
+  const progress =
+    visibleQuestions.length > 0
+      ? ((safeStep + 1) / visibleQuestions.length) * 100
+      : 0;
 
   const assessments = useMemo(
     () =>
-      COUNTRIES.map((country) => calculateScore(country, answers)).sort(
+      COUNTRIES.map((country) => calculateScore(country, answers, lang)).sort(
         (a, b) => b.score - a.score
       ),
-    [answers]
+    [answers, lang]
   );
 
   const visibleAssessments = showAll ? assessments : assessments.slice(0, 4);
 
   function chooseAnswer(value: string) {
-    setAnswers((previous) => ({
-      ...previous,
-      [currentQuestion.id]: value,
-    }));
+    if (!currentQuestion) return;
+    setAnswers((previous) => {
+      const next: Record<string, Answer> = {
+        ...previous,
+        [currentQuestion.id]: value,
+      };
+      if (currentQuestion.id === "goal" && value === "study") {
+        next.study = "yes";
+      }
+      if (currentQuestion.id === "goal" && value === "permanent") {
+        next.duration = "permanent";
+      }
+      saveWorldProfile(next);
+      return next;
+    });
   }
 
   function reset() {
+    clearWorldProfile();
     setAnswers({});
     setStep(0);
     setShowAll(false);
@@ -706,37 +841,51 @@ export default function WorldNavigatorPage() {
     return lang === "ru" ? question.labelRu : question.label;
   }
 
+  const aiAdvisorBlock = (
+    <div className="mx-auto mb-8 max-w-4xl">
+      <VisaAiAdvisor
+        lang={lang}
+        mode="world"
+        countryCode="GLOBAL"
+        countryName="World Comparison"
+        answers={answers}
+        routesSummary={assessments.slice(0, 5).map((item) => ({
+          name: item.country.name,
+          score: item.score,
+          warning: item.citizenshipNote,
+        }))}
+      />
+    </div>
+  );
+
   return (
     <main className="min-h-screen bg-slate-950 text-white">
       <EsurpysNavigation />
-
       <div className="mx-auto max-w-7xl px-4 pb-20 pt-10 sm:px-6 lg:px-8">
-        <header className="mx-auto mb-10 max-w-3xl text-center">
+        <header className="mx-auto mb-8 max-w-3xl text-center">
           <div className="mb-4 inline-flex items-center rounded-full border border-blue-400/20 bg-blue-400/10 px-4 py-2 text-xs font-semibold tracking-[0.18em] text-blue-300">
             {t.eyebrow}
           </div>
-
           <h1 className="text-4xl font-bold tracking-tight sm:text-5xl">
             {showResults ? t.resultsTitle : t.title}
           </h1>
-
           <p className="mx-auto mt-4 max-w-2xl text-base leading-7 text-slate-400 sm:text-lg">
             {showResults ? t.resultsSubtitle : t.subtitle}
           </p>
         </header>
 
-        {!showResults ? (
+        {/* Бесплатный ИИ-советник сразу виден сверху страницы */}
+        {aiAdvisorBlock}
+
+        {!showResults && currentQuestion ? (
           <section className="mx-auto max-w-3xl rounded-3xl border border-slate-800 bg-slate-900/80 p-5 shadow-2xl shadow-black/20 sm:p-8">
             <div className="mb-7 flex items-center justify-between gap-4">
               <div>
-                <p className="text-sm font-medium text-slate-400">
-                  {t.progress}
-                </p>
+                <p className="text-sm font-medium text-slate-400">{t.progress}</p>
                 <p className="mt-1 text-lg font-semibold">
-                  {t.question} {step + 1} {t.of} {QUESTIONS.length}
+                  {t.question} {safeStep + 1} {t.of} {visibleQuestions.length}
                 </p>
               </div>
-
               <div className="rounded-xl border border-slate-700 bg-slate-800 px-3 py-2 text-sm text-slate-300">
                 {Math.round(progress)}%
               </div>
@@ -751,20 +900,15 @@ export default function WorldNavigatorPage() {
 
             <div key={currentQuestion.id}>
               <p className="mb-2 text-sm font-medium text-blue-300">
-                {t.question} {step + 1}
+                {t.question} {safeStep + 1}
               </p>
-
               <h2 className="mb-6 text-2xl font-semibold leading-snug sm:text-3xl">
-                {lang === "ru"
-                  ? currentQuestion.labelRu
-                  : currentQuestion.label}
+                {lang === "ru" ? currentQuestion.labelRu : currentQuestion.label}
               </h2>
 
               <div className="grid gap-3">
                 {currentQuestion.options.map((option) => {
-                  const selected =
-                    answers[currentQuestion.id] === option.value;
-
+                  const selected = answers[currentQuestion.id] === option.value;
                   return (
                     <button
                       key={option.value}
@@ -780,7 +924,6 @@ export default function WorldNavigatorPage() {
                       <span className="pr-3 text-sm font-medium leading-6 text-slate-100 sm:text-base">
                         {lang === "ru" ? option.labelRu : option.label}
                       </span>
-
                       <span
                         className={`flex h-5 w-5 shrink-0 items-center justify-center rounded-full border ${
                           selected
@@ -801,21 +944,18 @@ export default function WorldNavigatorPage() {
             <div className="mt-8 flex items-center justify-between gap-3 border-t border-slate-800 pt-6">
               <button
                 type="button"
-                disabled={step === 0}
-                onClick={() =>
-                  setStep((previous) => Math.max(0, previous - 1))
-                }
+                disabled={safeStep === 0}
+                onClick={() => setStep((previous) => Math.max(0, previous - 1))}
                 className="rounded-xl border border-slate-700 px-5 py-3 text-sm font-semibold text-slate-300 transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-40"
               >
                 ← {t.back}
               </button>
-
-              {step < QUESTIONS.length - 1 ? (
+              {safeStep < visibleQuestions.length - 1 ? (
                 <button
                   type="button"
                   onClick={() =>
                     setStep((previous) =>
-                      Math.min(QUESTIONS.length - 1, previous + 1)
+                      Math.min(visibleQuestions.length - 1, previous + 1)
                     )
                   }
                   className="rounded-xl bg-blue-500 px-6 py-3 text-sm font-semibold text-white transition hover:bg-blue-400"
@@ -844,14 +984,12 @@ export default function WorldNavigatorPage() {
                 <p className="text-sm text-slate-400">{t.countries}</p>
                 <p className="mt-2 text-3xl font-bold">{COUNTRIES.length}</p>
               </div>
-
               <div className="rounded-2xl border border-slate-800 bg-slate-900 p-5">
                 <p className="text-sm text-slate-400">{t.answered}</p>
                 <p className="mt-2 text-3xl font-bold">
-                  {Object.keys(answers).length}/{QUESTIONS.length}
+                  {Object.keys(answers).length}/{visibleQuestions.length}
                 </p>
               </div>
-
               <div className="rounded-2xl border border-slate-800 bg-slate-900 p-5">
                 <p className="text-sm text-slate-400">{t.mainGoal}</p>
                 <p className="mt-2 text-xl font-bold">
@@ -863,9 +1001,7 @@ export default function WorldNavigatorPage() {
             </div>
 
             <div className="mb-6 rounded-2xl border border-amber-500/20 bg-amber-500/5 p-5">
-              <h2 className="font-semibold text-amber-200">
-                {t.reviewTitle}
-              </h2>
+              <h2 className="font-semibold text-amber-200">{t.reviewTitle}</h2>
               <p className="mt-2 text-sm leading-6 text-slate-300">
                 {t.reviewText}
               </p>
@@ -876,7 +1012,6 @@ export default function WorldNavigatorPage() {
                 <h2 className="text-2xl font-bold">{t.resultsTitle}</h2>
                 <p className="mt-2 text-sm text-slate-400">{t.matchNote}</p>
               </div>
-
               <button
                 type="button"
                 onClick={reset}
@@ -888,9 +1023,14 @@ export default function WorldNavigatorPage() {
 
             <div className="grid gap-5 lg:grid-cols-2">
               {visibleAssessments.map((assessment, index) => {
-                const { country, score, matched, concerns, missing } =
-                  assessment;
-
+                const {
+                  country,
+                  score,
+                  matched,
+                  concerns,
+                  missing,
+                  citizenshipNote,
+                } = assessment;
                 return (
                   <article
                     key={country.id}
@@ -901,26 +1041,18 @@ export default function WorldNavigatorPage() {
                         <div className="flex h-16 w-16 shrink-0 items-center justify-center rounded-2xl border border-slate-700 bg-slate-800 text-4xl">
                           {country.flag}
                         </div>
-
                         <div className="min-w-0 flex-1">
                           <div className="flex flex-wrap items-center gap-2">
-                            <h3 className="text-xl font-bold">
-                              {country.name}
-                            </h3>
-
+                            <h3 className="text-xl font-bold">{country.name}</h3>
                             {index === 0 && (
                               <span className="rounded-full border border-blue-400/20 bg-blue-400/10 px-2.5 py-1 text-xs font-semibold text-blue-300">
                                 {t.best}
                               </span>
                             )}
                           </div>
-
                           <p className="mt-1 text-sm text-slate-400">
-                            {lang === "ru"
-                              ? country.regionRu
-                              : country.region}
+                            {lang === "ru" ? country.regionRu : country.region}
                           </p>
-
                           <p className="mt-3 text-sm leading-6 text-slate-300">
                             {lang === "ru"
                               ? country.descriptionRu
@@ -928,6 +1060,12 @@ export default function WorldNavigatorPage() {
                           </p>
                         </div>
                       </div>
+
+                      {citizenshipNote && (
+                        <div className="mt-4 rounded-xl border border-emerald-500/25 bg-emerald-500/10 px-3.5 py-2.5 text-xs leading-5 text-emerald-200">
+                          {citizenshipNote}
+                        </div>
+                      )}
 
                       <div className="mt-6 rounded-2xl border border-slate-800 bg-slate-950/60 p-4">
                         <div className="mb-3 flex items-center justify-between gap-3">
@@ -938,14 +1076,12 @@ export default function WorldNavigatorPage() {
                             {score}%
                           </span>
                         </div>
-
                         <div className="h-2.5 overflow-hidden rounded-full bg-slate-800">
                           <div
                             className="h-full rounded-full bg-gradient-to-r from-blue-500 to-cyan-400 transition-all duration-500"
                             style={{ width: `${score}%` }}
                           />
                         </div>
-
                         <p className="mt-3 text-xs leading-5 text-slate-500">
                           {t.matchNote}
                         </p>
@@ -956,7 +1092,6 @@ export default function WorldNavigatorPage() {
                           <h4 className="mb-3 text-sm font-semibold text-emerald-300">
                             ✓ {t.matched}
                           </h4>
-
                           {matched.length ? (
                             <ul className="space-y-2">
                               {matched.map((id) => (
@@ -980,7 +1115,6 @@ export default function WorldNavigatorPage() {
                           <h4 className="mb-3 text-sm font-semibold text-amber-300">
                             ! {t.concerns}
                           </h4>
-
                           {concerns.length ? (
                             <ul className="space-y-2">
                               {concerns.map((id) => (
@@ -1023,7 +1157,6 @@ export default function WorldNavigatorPage() {
                         <h4 className="mb-3 text-sm font-semibold text-slate-200">
                           {t.pathways}
                         </h4>
-
                         <ul className="space-y-2">
                           {(lang === "ru"
                             ? country.pathwaysRu
@@ -1039,15 +1172,24 @@ export default function WorldNavigatorPage() {
                           ))}
                         </ul>
 
-                        <a
-                          href={country.website}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className="mt-5 inline-flex items-center gap-2 rounded-xl border border-blue-400/30 bg-blue-400/5 px-4 py-3 text-sm font-semibold text-blue-300 transition hover:bg-blue-400/10"
-                        >
-                          {t.official}
-                          <span aria-hidden="true">↗</span>
-                        </a>
+                        <div className="mt-5 flex flex-wrap gap-3">
+                          {country.quizHref && (
+                            <Link
+                              href={country.quizHref}
+                              className="inline-flex items-center gap-2 rounded-xl bg-blue-500 px-4 py-3 text-sm font-semibold text-white transition hover:bg-blue-400"
+                            >
+                              {t.deepQuiz} →
+                            </Link>
+                          )}
+                          <a
+                            href={country.website}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="inline-flex items-center gap-2 rounded-xl border border-blue-400/30 bg-blue-400/5 px-4 py-3 text-sm font-semibold text-blue-300 transition hover:bg-blue-400/10"
+                          >
+                            {t.official} ↗
+                          </a>
+                        </div>
                       </div>
                     </div>
                   </article>
