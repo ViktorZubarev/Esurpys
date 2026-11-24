@@ -1,7 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
-import { GoogleGenAI, Type } from "@google/genai";
+import { GoogleGenAI, ThinkingLevel, Type } from "@google/genai";
 
 export const preferredRegion = "iad1";
+export const maxDuration = 30;
 
 type AdvisorLang = "ru" | "en";
 
@@ -172,6 +173,57 @@ const RESPONSE_SCHEMA = {
   ],
 };
 
+function sleep(ms: number) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function isTransientError(message: string): boolean {
+  return (
+    message.includes("503") ||
+    message.includes("UNAVAILABLE") ||
+    message.includes("high demand") ||
+    message.includes("502") ||
+    message.includes("504")
+  );
+}
+
+function formatFriendlyError(rawMessage: string, lang: AdvisorLang): { status: number; message: string } {
+  const statusMatch = rawMessage.match(/\b(400|401|403|404|429|500|502|503|504)\b/);
+  const status = statusMatch ? Number(statusMatch[1]) : 500;
+
+  if (rawMessage.includes("User location is not supported")) {
+    return {
+      status: 400,
+      message:
+        lang === "ru"
+          ? "Запрос отклонён по региону IP (обычно при локальном запуске без VPN)."
+          : "Request rejected due to local IP region.",
+    };
+  }
+
+  if (status === 503 || rawMessage.includes("UNAVAILABLE") || rawMessage.includes("high demand")) {
+    return {
+      status: 503,
+      message:
+        lang === "ru"
+          ? "Сервер ИИ временно перегружен из-за высокой нагрузки. Попробуйте нажать «Спросить ИИ» ещё раз через несколько секунд."
+          : "AI servers are temporarily experiencing high demand. Please try again in a few seconds.",
+    };
+  }
+
+  if (status === 429) {
+    return {
+      status: 429,
+      message:
+        lang === "ru"
+          ? "Превышен бесплатный лимит запросов в минуту. Подождите 30–60 секунд и повторите попытку."
+          : "Free-tier rate limit reached. Please wait a minute and try again.",
+    };
+  }
+
+  return { status, message: rawMessage };
+}
+
 export async function POST(request: NextRequest) {
   const apiKey = process.env.GEMINI_API_KEY;
   if (!apiKey) {
@@ -229,7 +281,8 @@ export async function POST(request: NextRequest) {
   const systemInstruction = [
     "You are an immigration & visa information assistant inside the Esurpys navigator app.",
     `Respond strictly in ${lang === "ru" ? "Russian" : "English"}.`,
-    "If questionnaireAnswers is empty or sparse, start by briefly listing likely routes for the target country/global options and immediately ask 3 high-impact clarifyingQuestions (goal, citizenship, profession/job offer or study/family) so the user can get tailored results through conversation.",
+    "Keep responses concise and structured.",
+    "If questionnaireAnswers is empty or sparse, start by briefly listing likely routes for the target country/global options based on userNote and immediately ask 3 high-impact clarifyingQuestions so the user can narrow down options.",
     "Stay grounded in the user's questionnaire answers, userNote, follow-up answers, and deterministic route scores.",
     "Never guarantee visa approval, never invent exact legal fees if uncertain, and never give false citizenship privileges.",
     "Explain key nuances (employer sponsorship, degree recognition, salary thresholds, visa history, status expiration, age cutoffs).",
@@ -250,41 +303,52 @@ export async function POST(request: NextRequest) {
     2
   );
 
-  try {
-    const response = await ai.models.generateContent({
-      model: "gemini-4-hydrogen",
-      contents: `Analyze this immigration profile and return structured guidance:\n\n${prompt}`,
-      config: {
-        systemInstruction,
-        responseMimeType: "application/json",
-        responseSchema: RESPONSE_SCHEMA,
-      },
-    });
+  const contents = `Analyze this immigration profile and return structured guidance:\n\n${prompt}`;
 
-    const rawText = (response.text ?? "").trim();
-    if (!rawText) {
-      return NextResponse.json(
-        { error: "The AI service returned an empty response." },
-        { status: 502 }
-      );
+  const attempts: Array<{ model: string; useLowThinking: boolean; delayMs: number }> = [
+    { model: "gemini-4-hydrogen", useLowThinking: true, delayMs: 0 },
+    { model: "gemini-4-hydrogen", useLowThinking: true, delayMs: 700 },
+    { model: "gemini-3.1-flash-lite", useLowThinking: false, delayMs: 400 },
+  ];
+
+  let lastErrorMessage = "Failed to generate AI advice.";
+
+  for (const attempt of attempts) {
+    if (attempt.delayMs > 0) {
+      await sleep(attempt.delayMs);
     }
 
-    const parsed = JSON.parse(rawText);
-    return NextResponse.json(parsed);
-  } catch (err: unknown) {
-    const rawMessage =
-      err instanceof Error ? err.message : "Failed to generate AI advice.";
-    const statusMatch = rawMessage.match(/\b(400|401|403|404|429|500|503)\b/);
-    const status = statusMatch ? Number(statusMatch[1]) : 500;
+    try {
+      const response = await ai.models.generateContent({
+        model: attempt.model,
+        contents,
+        config: {
+          systemInstruction,
+          responseMimeType: "application/json",
+          responseSchema: RESPONSE_SCHEMA,
+          ...(attempt.useLowThinking
+            ? { thinkingConfig: { thinkingLevel: ThinkingLevel.LOW } }
+            : {}),
+        },
+      });
 
-    if (rawMessage.includes("User location is not supported")) {
-      const friendly =
-        lang === "ru"
-          ? "Запрос к Gemini API отклонён по региону вашего локального IP (локальный компьютер). После публикации на Vercel серверный маршрут настроен на регион США (iad1) и будет работать без этой ошибки; для теста с домашнего ПК нужен VPN."
-          : "Gemini API rejected the request due to your local machine's region/IP. Once deployed on Vercel, this route runs in US East (iad1) where Gemini API is supported.";
-      return NextResponse.json({ error: friendly }, { status: 400 });
+      const rawText = (response.text ?? "").trim();
+      if (!rawText) {
+        lastErrorMessage = "The AI service returned an empty response.";
+        continue;
+      }
+
+      const parsed = JSON.parse(rawText);
+      return NextResponse.json(parsed);
+    } catch (err: unknown) {
+      lastErrorMessage =
+        err instanceof Error ? err.message : "Failed to generate AI advice.";
+      if (!isTransientError(lastErrorMessage)) {
+        break;
+      }
     }
-
-    return NextResponse.json({ error: rawMessage }, { status });
   }
+
+  const formatted = formatFriendlyError(lastErrorMessage, lang);
+  return NextResponse.json({ error: formatted.message }, { status: formatted.status });
 }
