@@ -5,6 +5,7 @@ export const preferredRegion = "iad1";
 export const maxDuration = 30;
 
 type AdvisorLang = "ru" | "en";
+type PreferredModel = "gemini-4-hydrogen" | "gemini-3.1-flash-lite";
 
 type RouteSummaryInput = {
   name: string;
@@ -24,6 +25,7 @@ type AdvisorRequestBody = {
   countryCode?: string;
   countryName?: string;
   round?: number;
+  preferredModel?: PreferredModel;
   answers?: Record<string, string>;
   userNote?: string;
   routesSummary?: RouteSummaryInput[];
@@ -31,7 +33,7 @@ type AdvisorRequestBody = {
 };
 
 const RATE_WINDOW_MS = 60_000;
-const MAX_REQUESTS_PER_WINDOW = 20;
+const MAX_REQUESTS_PER_WINDOW = 25;
 const ipHits = new Map<string, number[]>();
 
 function isRateLimited(ip: string): boolean {
@@ -69,15 +71,15 @@ function sanitizeAnswers(raw: unknown): Record<string, string> {
 
 function sanitizeRoutes(raw: unknown): RouteSummaryInput[] {
   if (!Array.isArray(raw)) return [];
-  return raw.slice(0, 8).map((item) => {
+  return raw.slice(0, 6).map((item) => {
     const obj = (item ?? {}) as Record<string, unknown>;
     return {
-      name: String(obj.name ?? "Route").slice(0, 100),
+      name: String(obj.name ?? "Route").slice(0, 80),
       score: Number.isFinite(Number(obj.score)) ? Number(obj.score) : 0,
       status:
-        typeof obj.status === "string" ? obj.status.slice(0, 40) : undefined,
+        typeof obj.status === "string" ? obj.status.slice(0, 30) : undefined,
       warning:
-        typeof obj.warning === "string" ? obj.warning.slice(0, 220) : undefined,
+        typeof obj.warning === "string" ? obj.warning.slice(0, 160) : undefined,
     };
   });
 }
@@ -89,8 +91,8 @@ function sanitizeFollowUps(raw: unknown): FollowUpInput[] {
     .map((item) => {
       const obj = (item ?? {}) as Record<string, unknown>;
       return {
-        question: String(obj.question ?? "").trim().slice(0, 200),
-        answer: String(obj.answer ?? "").trim().slice(0, 300),
+        question: String(obj.question ?? "").trim().slice(0, 180),
+        answer: String(obj.answer ?? "").trim().slice(0, 220),
       };
     })
     .filter((item) => item.question && item.answer);
@@ -101,37 +103,28 @@ const RESPONSE_SCHEMA = {
   properties: {
     headline: {
       type: Type.STRING,
-      description: "Short 1-sentence headline summarizing the user's situation.",
+      description: "Concise 1-sentence headline.",
     },
     verdict: {
       type: Type.STRING,
-      description:
-        "2-4 sentences explaining the realistic picture and key bottleneck.",
+      description: "2 short sentences explaining realistic fit and main bottleneck.",
     },
     topRoutes: {
       type: Type.ARRAY,
       items: {
         type: Type.OBJECT,
         properties: {
-          country: {
-            type: Type.STRING,
-            description: "Country name in the response language.",
-          },
-          name: {
-            type: Type.STRING,
-            description: "Best matching visa/route name for that country.",
-          },
+          country: { type: Type.STRING },
+          name: { type: Type.STRING },
           alternativeVisas: {
             type: Type.STRING,
-            description:
-              "1-3 alternative visa codes worth checking in this country (e.g. 'F-1, J-1, O-1' or 'Ausbildung, Студенческая').",
+            description: "1-3 short alternative visa codes like 'F-1, J-1, O-1'.",
           },
-          matchPercent: {
-            type: Type.INTEGER,
-            description:
-              "Estimated compatibility percentage from 5 to 95 (integer only).",
+          matchPercent: { type: Type.INTEGER },
+          why: {
+            type: Type.STRING,
+            description: "1 short sentence explaining why.",
           },
-          why: { type: Type.STRING },
         },
         required: [
           "country",
@@ -145,13 +138,11 @@ const RESPONSE_SCHEMA = {
     importantNuances: {
       type: Type.ARRAY,
       items: { type: Type.STRING },
-      description:
-        "3 to 5 specific legal, status, sponsorship, salary, or documentation nuances.",
+      description: "3 concise legal/practical nuances.",
     },
     financialOverview: {
       type: Type.STRING,
-      description:
-        "Brief high-level note about typical proof-of-funds or fee expectations (not a full budget breakdown).",
+      description: "1-2 short sentences on typical proof-of-funds/fees.",
     },
     clarifyingQuestions: {
       type: Type.ARRAY,
@@ -168,12 +159,11 @@ const RESPONSE_SCHEMA = {
         },
         required: ["id", "question", "hint", "quickOptions"],
       },
-      description: "Targeted follow-up questions (empty array if round >= 3).",
     },
     nextSteps: {
       type: Type.ARRAY,
       items: { type: Type.STRING },
-      description: "2 to 4 concrete immediate actions.",
+      description: "2 to 3 short action steps.",
     },
     disclaimer: {
       type: Type.STRING,
@@ -190,10 +180,6 @@ const RESPONSE_SCHEMA = {
     "disclaimer",
   ],
 };
-
-function sleep(ms: number) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
 
 function isTransientError(message: string): boolean {
   return (
@@ -235,8 +221,8 @@ function formatFriendlyError(
       status: 503,
       message:
         lang === "ru"
-          ? "Серверы Google ИИ временно перегружены (503). Нажмите кнопку ниже, чтобы повторить."
-          : "Google AI servers are temporarily busy (503). Please retry below.",
+          ? "Серверы Google ИИ временно перегружены (503). Нажмите «Повторить сейчас»."
+          : "Google AI servers are temporarily busy (503). Please click Retry.",
     };
   }
 
@@ -254,6 +240,7 @@ function formatFriendlyError(
 }
 
 export async function POST(request: NextRequest) {
+  const startedAt = Date.now();
   const apiKey = process.env.GEMINI_API_KEY;
   if (!apiKey) {
     return NextResponse.json(
@@ -294,6 +281,15 @@ export async function POST(request: NextRequest) {
   );
   const countryCode = String(body.countryCode ?? "GLOBAL").slice(0, 16);
   const round = Math.max(1, Math.min(3, Number(body.round) || 1));
+  const primaryModel: PreferredModel =
+    body.preferredModel === "gemini-3.1-flash-lite"
+      ? "gemini-3.1-flash-lite"
+      : "gemini-4-hydrogen";
+  const fallbackModel: PreferredModel =
+    primaryModel === "gemini-4-hydrogen"
+      ? "gemini-3.1-flash-lite"
+      : "gemini-4-hydrogen";
+
   const answers = sanitizeAnswers(body.answers);
   const userNote = String(body.userNote ?? "").trim().slice(0, 600);
   const routesSummary = sanitizeRoutes(body.routesSummary);
@@ -311,93 +307,86 @@ export async function POST(request: NextRequest) {
   const coverageRule =
     mode === "world"
       ? lang === "ru"
-        ? "In topRoutes you MUST evaluate and return ALL 6 countries of this platform: Германия, Нидерланды, Великобритания, Канада, Австралия, США — sorted from highest matchPercent to lowest."
-        : "In topRoutes you MUST evaluate and return ALL 6 countries of this platform: Germany, Netherlands, United Kingdom, Canada, Australia, United States — sorted from highest matchPercent to lowest."
-      : `In topRoutes return 4 to 6 specific visa routes for ${countryName}, sorted from highest matchPercent (5 to 95) to lowest.`;
+        ? "In topRoutes return ALL 6 countries: Германия, Нидерланды, Великобритания, Канада, Австралия, США — sorted from highest matchPercent (5-95) to lowest."
+        : "In topRoutes return ALL 6 countries: Germany, Netherlands, United Kingdom, Canada, Australia, United States — sorted from highest matchPercent (5-95) to lowest."
+      : `In topRoutes return 4 to 6 visa routes for ${countryName}, sorted from highest matchPercent (5-95) to lowest.`;
 
   const questionCountRule =
     round >= 3
-      ? "This is the final wrap-up (round >= 3). Return an EMPTY clarifyingQuestions array [] because both rounds of clarifying questions are complete."
+      ? "Final wrap-up (round >= 3): return EMPTY clarifyingQuestions array []."
       : round === 2
-      ? "This is Round 2 of 2. Ask EXACTLY 2 deeper clarifyingQuestions (do NOT repeat any topic already answered in userFollowUpAnswers; focus on willingness to study/F-1/Ausbildung vs job search, timeline, or portfolio/sponsors)."
-      : "This is Round 1 of 2. Return EXACTLY 3 targeted clarifyingQuestions (each with 2-4 short quickOptions) to identify education, language, and work/study status.";
+      ? "Round 2 of 2: ask EXACTLY 2 deeper clarifyingQuestions (do not repeat topics from userFollowUpAnswers; check study/F-1/Ausbildung openness, timeline, or sponsors)."
+      : "Round 1 of 2: return EXACTLY 3 short clarifyingQuestions (2-4 short quickOptions each) covering education, language, and work/study status.";
 
   const profileNuanceRule =
-    "IMPORTANT: When the user is young (e.g. 18-24), currently studying, or lacks a completed university degree, do NOT ignore study/training/exchange visas. Actively include options like F-1 Student (with OPT) and J-1 in the US, paid Ausbildung or Studienvisum in Germany, Study Permit + PGWP in Canada, Student Visa 500 in Australia, UK Student/Graduate, and NL Study/Orientation Year — either as the top route or clearly in alternativeVisas, noting scholarships/sponsors or paid training when funds are limited.";
+    "If user is young (18-24), studying, or has no bachelor's degree, actively include study/training visas (F-1 + OPT / J-1 in US, paid Ausbildung / Studienvisum in Germany, Study Permit in Canada, Student 500 in Australia, UK Student/Graduate, NL Study) in the route or alternativeVisas, noting scholarship/sponsor nuances when budget is low.";
 
   const systemInstruction = [
-    "You are an immigration & visa information assistant inside the Esurpys navigator app.",
+    "You are a concise visa & immigration assistant inside Esurpys.",
     `Respond strictly in ${lang === "ru" ? "Russian" : "English"}.`,
+    "Keep every field ultra-concise (1 short sentence per item) so JSON stays compact and fast.",
     coverageRule,
     questionCountRule,
     profileNuanceRule,
-    "Stay grounded in the user's questionnaire answers, userNote, userFollowUpAnswers, and deterministic route scores.",
-    "Never guarantee visa approval, never invent exact legal fees if uncertain, and never give false citizenship privileges.",
-    "Explain key nuances (employer sponsorship, degree recognition, salary thresholds, visa history, status expiration, age cutoffs, proof of funds).",
-    "For financialOverview: give only a concise high-level mention of typical proof-of-funds or government fees (do NOT build a multi-item moving budget).",
+    "Never guarantee approval. For financialOverview mention only brief proof-of-funds/fee expectations (no multi-item budget).",
   ].join(" ");
 
-  const prompt = JSON.stringify(
-    {
-      mode,
-      round,
-      target: { countryCode, countryName },
-      userNote: userNote || undefined,
-      questionnaireAnswers: answers,
-      deterministicMatches: routesSummary,
-      userFollowUpAnswers: followUpAnswers,
-    },
-    null,
-    2
-  );
+  const prompt = JSON.stringify({
+    mode,
+    round,
+    target: { countryCode, countryName },
+    userNote: userNote || undefined,
+    questionnaireAnswers: answers,
+    deterministicMatches: routesSummary,
+    userFollowUpAnswers: followUpAnswers,
+  });
 
-  const contents = `Analyze this immigration profile and return structured guidance:\n\n${prompt}`;
+  const contents = `Analyze profile:\n${prompt}`;
 
-  const attempts: Array<{
-    model: string;
-    useLowThinking: boolean;
-    delayMs: number;
-  }> = [
-    { model: "gemini-4-hydrogen", useLowThinking: true, delayMs: 0 },
-    { model: "gemini-3.1-flash-lite", useLowThinking: false, delayMs: 800 },
-    { model: "gemini-4-hydrogen", useLowThinking: false, delayMs: 1400 },
-  ];
+  async function callModel(modelName: PreferredModel) {
+    const response = await ai.models.generateContent({
+      model: modelName,
+      contents,
+      config: {
+        systemInstruction,
+        responseMimeType: "application/json",
+        responseSchema: RESPONSE_SCHEMA,
+        ...(modelName === "gemini-4-hydrogen"
+          ? { thinkingConfig: { thinkingLevel: ThinkingLevel.LOW } }
+          : {}),
+      },
+    });
+    const rawText = (response.text ?? "").trim();
+    if (!rawText) {
+      throw new Error("Empty response from AI.");
+    }
+    return JSON.parse(rawText);
+  }
 
   let lastErrorMessage = "Failed to generate AI advice.";
 
-  for (const attempt of attempts) {
-    if (attempt.delayMs > 0) {
-      await sleep(attempt.delayMs);
-    }
+  try {
+    const parsed = await callModel(primaryModel);
+    return NextResponse.json(parsed);
+  } catch (err: unknown) {
+    lastErrorMessage =
+      err instanceof Error ? err.message : "Failed to generate AI advice.";
+    console.error(`[ai-advisor] ${primaryModel} failed:`, lastErrorMessage);
 
-    try {
-      const response = await ai.models.generateContent({
-        model: attempt.model,
-        contents,
-        config: {
-          systemInstruction,
-          responseMimeType: "application/json",
-          responseSchema: RESPONSE_SCHEMA,
-          ...(attempt.useLowThinking
-            ? { thinkingConfig: { thinkingLevel: ThinkingLevel.LOW } }
-            : {}),
-        },
-      });
-
-      const rawText = (response.text ?? "").trim();
-      if (!rawText) {
-        lastErrorMessage = "The AI service returned an empty response.";
-        continue;
-      }
-
-      const parsed = JSON.parse(rawText);
-      return NextResponse.json(parsed);
-    } catch (err: unknown) {
-      lastErrorMessage =
-        err instanceof Error ? err.message : "Failed to generate AI advice.";
-      console.error(`[ai-advisor] ${attempt.model} failed:`, lastErrorMessage);
-      if (!isTransientError(lastErrorMessage)) {
-        break;
+    const elapsedMs = Date.now() - startedAt;
+    if (isTransientError(lastErrorMessage) && elapsedMs < 3500) {
+      try {
+        const parsedFallback = await callModel(fallbackModel);
+        return NextResponse.json(parsedFallback);
+      } catch (fallbackErr: unknown) {
+        lastErrorMessage =
+          fallbackErr instanceof Error
+            ? fallbackErr.message
+            : "Fallback model failed.";
+        console.error(
+          `[ai-advisor] ${fallbackModel} failed:`,
+          lastErrorMessage
+        );
       }
     }
   }

@@ -49,6 +49,12 @@ type VisaAiAdvisorProps = {
 
 const MAX_ROUNDS = 2;
 
+const WAVE_MODELS = [
+  "gemini-4-hydrogen",
+  "gemini-3.1-flash-lite",
+  "gemini-4-hydrogen",
+] as const;
+
 const TEXT = {
   ru: {
     badge: "БЕСПЛАТНЫЙ ИИ-СОВЕТНИК",
@@ -62,7 +68,9 @@ const TEXT = {
     finishBtn: "Получить итоговый разбор →",
     retryBtn: "Повторить сейчас",
     loading: "ИИ анализирует профиль...",
-    retrying: "Серверы Google заняты, повторяю запрос",
+    retrying: "Переключаюсь на резервную модель",
+    timeoutError:
+      "Сервер не успел ответить за 10 секунд (таймаут Vercel). Нажмите «Повторить сейчас».",
     topRoutesWorld: "Оценка по всем 6 странам (в %)",
     topRoutesCountry: "Подходящие маршруты по стране (в %)",
     altVisasLabel: "Также рассмотреть:",
@@ -93,7 +101,9 @@ const TEXT = {
     finishBtn: "Get Final Analysis →",
     retryBtn: "Retry now",
     loading: "AI is analyzing your profile...",
-    retrying: "Google servers are busy, retrying",
+    retrying: "Switching to backup model",
+    timeoutError:
+      "The server timed out after 10 seconds. Please click Retry now.",
     topRoutesWorld: "Match Across All 6 Countries (%)",
     topRoutesCountry: "Matching Routes for This Country (%)",
     altVisasLabel: "Also consider:",
@@ -172,38 +182,40 @@ export default function VisaAiAdvisor({
     const nextRound = includeFollowUps ? round + 1 : 1;
     const mergedHistory = includeFollowUps ? [...history, ...newEntries] : [];
 
-    const payload = JSON.stringify({
-      lang,
-      mode,
-      countryCode,
-      countryName,
-      round: nextRound,
-      answers,
-      userNote,
-      routesSummary,
-      followUpAnswers: mergedHistory,
-    });
-
-    const maxWaves = 3;
-
     try {
-      for (let wave = 1; wave <= maxWaves; wave++) {
-        if (wave > 1) {
-          setStatusText(`${t.retrying} (${wave}/${maxWaves})...`);
-          await wait(2400);
+      for (let i = 0; i < WAVE_MODELS.length; i++) {
+        const preferredModel = WAVE_MODELS[i];
+        if (i > 0) {
+          setStatusText(`${t.retrying} (${i + 1}/${WAVE_MODELS.length})...`);
+          await wait(1200);
         }
 
         const response = await fetch("/api/ai-advisor", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: payload,
+          body: JSON.stringify({
+            lang,
+            mode,
+            countryCode,
+            countryName,
+            round: nextRound,
+            preferredModel,
+            answers,
+            userNote,
+            routesSummary,
+            followUpAnswers: mergedHistory,
+          }),
         });
 
-        const data = (await response.json()) as AiAdvisorResult & {
-          error?: string;
-        };
+        const rawText = await response.text();
+        let data: (AiAdvisorResult & { error?: string }) | null = null;
+        try {
+          data = JSON.parse(rawText) as AiAdvisorResult & { error?: string };
+        } catch {
+          data = null;
+        }
 
-        if (response.ok) {
+        if (response.ok && data) {
           setResult(data);
           setRound(nextRound);
           setHistory(mergedHistory);
@@ -211,13 +223,19 @@ export default function VisaAiAdvisor({
           return;
         }
 
-        const canRetryWave =
-          response.status === 503 &&
-          !data.error?.includes("GEMINI_API_KEY") &&
-          wave < maxWaves;
+        const errorMsg =
+          data?.error ??
+          (response.status === 504 || response.status === 502
+            ? t.timeoutError
+            : `HTTP ${response.status}`);
 
-        if (!canRetryWave) {
-          throw new Error(data.error || `HTTP ${response.status}`);
+        const isRetryable =
+          [502, 503, 504].includes(response.status) &&
+          !errorMsg.includes("GEMINI_API_KEY") &&
+          i < WAVE_MODELS.length - 1;
+
+        if (!isRetryable) {
+          throw new Error(errorMsg);
         }
       }
     } catch (err: unknown) {
