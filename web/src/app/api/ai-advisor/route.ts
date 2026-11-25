@@ -189,6 +189,8 @@ function isTransientError(message: string): boolean {
     message.includes("503") ||
     message.includes("UNAVAILABLE") ||
     message.includes("high demand") ||
+    message.includes("429") ||
+    message.includes("500") ||
     message.includes("502") ||
     message.includes("504")
   );
@@ -222,8 +224,8 @@ function formatFriendlyError(
       status: 503,
       message:
         lang === "ru"
-          ? "Сервер ИИ временно перегружен. Нажмите «Спросить ИИ» ещё раз через пару секунд."
-          : "AI servers are temporarily experiencing high demand. Please try again in a few seconds.",
+          ? "Серверы Google ИИ временно перегружены (503). Нажмите «Спросить ИИ» ещё раз через пару секунд."
+          : "Google AI servers are temporarily busy (503). Please click Ask AI again in a few seconds.",
     };
   }
 
@@ -232,8 +234,8 @@ function formatFriendlyError(
       status: 429,
       message:
         lang === "ru"
-          ? "Превышен бесплатный лимит запросов в минуту. Подождите 30–60 секунд."
-          : "Free-tier rate limit reached. Please wait a minute and try again.",
+          ? "Превышен бесплатный лимит запросов в минуту (429). Подождите 30–60 секунд."
+          : "Free-tier rate limit reached (429). Please wait a minute and try again.",
     };
   }
 
@@ -342,8 +344,8 @@ export async function POST(request: NextRequest) {
     delayMs: number;
   }> = [
     { model: "gemini-4-hydrogen", useLowThinking: true, delayMs: 0 },
-    { model: "gemini-4-hydrogen", useLowThinking: true, delayMs: 700 },
-    { model: "gemini-3.1-flash-lite", useLowThinking: false, delayMs: 400 },
+    { model: "gemini-3.1-flash-lite", useLowThinking: false, delayMs: 900 },
+    { model: "gemini-4-hydrogen", useLowThinking: true, delayMs: 1800 },
   ];
 
   let lastErrorMessage = "Failed to generate AI advice.";
@@ -378,6 +380,7 @@ export async function POST(request: NextRequest) {
     } catch (err: unknown) {
       lastErrorMessage =
         err instanceof Error ? err.message : "Failed to generate AI advice.";
+      console.error(`[ai-advisor] ${attempt.model} failed:`, lastErrorMessage);
       if (!isTransientError(lastErrorMessage)) {
         break;
       }
