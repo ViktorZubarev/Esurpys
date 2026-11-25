@@ -10,8 +10,6 @@ type PreferredModel = "gemini-4-hydrogen" | "gemini-3.1-flash-lite";
 type RouteSummaryInput = {
   name: string;
   score: number;
-  status?: string;
-  warning?: string;
 };
 
 type FollowUpInput = {
@@ -33,7 +31,9 @@ type AdvisorRequestBody = {
 };
 
 const RATE_WINDOW_MS = 60_000;
-const MAX_REQUESTS_PER_WINDOW = 25;
+const MAX_REQUESTS_PER_WINDOW = 60;
+const SINGLE_CALL_TIMEOUT_MS = 8_000;
+
 const ipHits = new Map<string, number[]>();
 
 function isRateLimited(ip: string): boolean {
@@ -62,8 +62,8 @@ function sanitizeAnswers(raw: unknown): Record<string, string> {
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) return {};
   const result: Record<string, string> = {};
   for (const [k, v] of Object.entries(raw)) {
-    if (typeof v === "string" && v.trim() && Object.keys(result).length < 40) {
-      result[k.slice(0, 48)] = v.slice(0, 120);
+    if (typeof v === "string" && v.trim() && Object.keys(result).length < 30) {
+      result[k.slice(0, 48)] = v.slice(0, 100);
     }
   }
   return result;
@@ -74,12 +74,8 @@ function sanitizeRoutes(raw: unknown): RouteSummaryInput[] {
   return raw.slice(0, 6).map((item) => {
     const obj = (item ?? {}) as Record<string, unknown>;
     return {
-      name: String(obj.name ?? "Route").slice(0, 80),
+      name: String(obj.name ?? "Route").slice(0, 60),
       score: Number.isFinite(Number(obj.score)) ? Number(obj.score) : 0,
-      status:
-        typeof obj.status === "string" ? obj.status.slice(0, 30) : undefined,
-      warning:
-        typeof obj.warning === "string" ? obj.warning.slice(0, 160) : undefined,
     };
   });
 }
@@ -87,12 +83,12 @@ function sanitizeRoutes(raw: unknown): RouteSummaryInput[] {
 function sanitizeFollowUps(raw: unknown): FollowUpInput[] {
   if (!Array.isArray(raw)) return [];
   return raw
-    .slice(0, 10)
+    .slice(0, 8)
     .map((item) => {
       const obj = (item ?? {}) as Record<string, unknown>;
       return {
-        question: String(obj.question ?? "").trim().slice(0, 180),
-        answer: String(obj.answer ?? "").trim().slice(0, 220),
+        question: String(obj.question ?? "").trim().slice(0, 160),
+        answer: String(obj.answer ?? "").trim().slice(0, 200),
       };
     })
     .filter((item) => item.question && item.answer);
@@ -103,11 +99,11 @@ const RESPONSE_SCHEMA = {
   properties: {
     headline: {
       type: Type.STRING,
-      description: "Concise 1-sentence headline.",
+      description: "Short 1-sentence headline.",
     },
     verdict: {
       type: Type.STRING,
-      description: "2 short sentences explaining realistic fit and main bottleneck.",
+      description: "1-2 short sentences on realistic fit and main bottleneck.",
     },
     topRoutes: {
       type: Type.ARRAY,
@@ -118,12 +114,12 @@ const RESPONSE_SCHEMA = {
           name: { type: Type.STRING },
           alternativeVisas: {
             type: Type.STRING,
-            description: "1-3 short alternative visa codes like 'F-1, J-1, O-1'.",
+            description: "1-3 short visa codes, e.g. 'F-1, J-1, O-1'.",
           },
           matchPercent: { type: Type.INTEGER },
           why: {
             type: Type.STRING,
-            description: "1 short sentence explaining why.",
+            description: "1 short sentence (max 14 words).",
           },
         },
         required: [
@@ -142,7 +138,7 @@ const RESPONSE_SCHEMA = {
     },
     financialOverview: {
       type: Type.STRING,
-      description: "1-2 short sentences on typical proof-of-funds/fees.",
+      description: "1 short sentence on typical proof-of-funds/fees.",
     },
     clarifyingQuestions: {
       type: Type.ARRAY,
@@ -163,10 +159,7 @@ const RESPONSE_SCHEMA = {
     nextSteps: {
       type: Type.ARRAY,
       items: { type: Type.STRING },
-      description: "2 to 3 short action steps.",
-    },
-    disclaimer: {
-      type: Type.STRING,
+      description: "2-3 concise action steps.",
     },
   },
   required: [
@@ -177,26 +170,47 @@ const RESPONSE_SCHEMA = {
     "financialOverview",
     "clarifyingQuestions",
     "nextSteps",
-    "disclaimer",
   ],
 };
 
-function isTransientError(message: string): boolean {
-  return (
-    message.includes("503") ||
-    message.includes("UNAVAILABLE") ||
-    message.includes("high demand") ||
-    message.includes("429") ||
-    message.includes("500") ||
-    message.includes("502") ||
-    message.includes("504")
-  );
+async function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeoutPromise = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => {
+      reject(new Error("504 Request timeout waiting for Gemini API"));
+    }, ms);
+  });
+  try {
+    return await Promise.race([promise, timeoutPromise]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
+function parseAiJson(rawText: string): unknown {
+  const cleaned = rawText
+    .trim()
+    .replace(/^```json\s*/i, "")
+    .replace(/^```\s*/i, "")
+    .replace(/\s*```$/i, "")
+    .trim();
+
+  try {
+    return JSON.parse(cleaned);
+  } catch {
+    const start = cleaned.indexOf("{");
+    const end = cleaned.lastIndexOf("}");
+    if (start !== -1 && end > start) {
+      return JSON.parse(cleaned.slice(start, end + 1));
+    }
+    throw new Error("502 Invalid JSON returned by AI model.");
+  }
 }
 
 function formatFriendlyError(
   rawMessage: string,
   lang: AdvisorLang
-): { status: number; message: string } {
+): { status: number; message: string; retryable: boolean } {
   const statusMatch = rawMessage.match(
     /\b(400|401|403|404|429|500|502|503|504)\b/
   );
@@ -205,6 +219,7 @@ function formatFriendlyError(
   if (rawMessage.includes("User location is not supported")) {
     return {
       status: 400,
+      retryable: false,
       message:
         lang === "ru"
           ? "Запрос отклонён по региону IP (обычно при локальном запуске без VPN)."
@@ -219,34 +234,47 @@ function formatFriendlyError(
   ) {
     return {
       status: 503,
+      retryable: true,
       message:
         lang === "ru"
           ? "Серверы Google ИИ временно перегружены (503). Нажмите «Повторить сейчас»."
-          : "Google AI servers are temporarily busy (503). Please click Retry.",
+          : "Google AI servers are temporarily busy (503). Please click Retry now.",
+    };
+  }
+
+  if (status === 504 || status === 502 || status === 500) {
+    return {
+      status,
+      retryable: true,
+      message:
+        lang === "ru"
+          ? "Модель не успела ответить вовремя. Нажмите «Повторить сейчас»."
+          : "The AI model timed out. Please click Retry now.",
     };
   }
 
   if (status === 429) {
     return {
       status: 429,
+      retryable: true,
       message:
         lang === "ru"
-          ? "Превышен бесплатный лимит запросов в минуту (429). Подождите 30–60 секунд."
-          : "Free-tier rate limit reached (429). Please wait a minute and try again.",
+          ? "Временный лимит бесплатного тарифа (429). Подождите 15–30 секунд и повторите."
+          : "Free-tier rate limit reached (429). Please wait 15-30 seconds and retry.",
     };
   }
 
-  return { status, message: rawMessage };
+  return { status, retryable: false, message: rawMessage };
 }
 
 export async function POST(request: NextRequest) {
-  const startedAt = Date.now();
   const apiKey = process.env.GEMINI_API_KEY;
   if (!apiKey) {
     return NextResponse.json(
       {
         error:
           "AI advisor is not configured on the server (missing GEMINI_API_KEY).",
+        retryable: false,
       },
       { status: 503 }
     );
@@ -258,6 +286,7 @@ export async function POST(request: NextRequest) {
       {
         error:
           "Too many AI requests. Please wait a minute before asking again.",
+        retryable: true,
       },
       { status: 429 }
     );
@@ -268,7 +297,7 @@ export async function POST(request: NextRequest) {
     body = (await request.json()) as AdvisorRequestBody;
   } catch {
     return NextResponse.json(
-      { error: "Invalid JSON request body." },
+      { error: "Invalid JSON request body.", retryable: false },
       { status: 400 }
     );
   }
@@ -281,17 +310,13 @@ export async function POST(request: NextRequest) {
   );
   const countryCode = String(body.countryCode ?? "GLOBAL").slice(0, 16);
   const round = Math.max(1, Math.min(3, Number(body.round) || 1));
-  const primaryModel: PreferredModel =
+  const modelName: PreferredModel =
     body.preferredModel === "gemini-3.1-flash-lite"
-      ? "gemini-3.1-flash-lite"
-      : "gemini-4-hydrogen";
-  const fallbackModel: PreferredModel =
-    primaryModel === "gemini-4-hydrogen"
       ? "gemini-3.1-flash-lite"
       : "gemini-4-hydrogen";
 
   const answers = sanitizeAnswers(body.answers);
-  const userNote = String(body.userNote ?? "").trim().slice(0, 600);
+  const userNote = String(body.userNote ?? "").trim().slice(0, 500);
   const routesSummary = sanitizeRoutes(body.routesSummary);
   const followUpAnswers = sanitizeFollowUps(body.followUpAnswers);
 
@@ -313,87 +338,71 @@ export async function POST(request: NextRequest) {
 
   const questionCountRule =
     round >= 3
-      ? "Final wrap-up (round >= 3): return EMPTY clarifyingQuestions array []."
+      ? "Round >= 3: return EMPTY clarifyingQuestions array []."
       : round === 2
-      ? "Round 2 of 2: ask EXACTLY 2 deeper clarifyingQuestions (do not repeat topics from userFollowUpAnswers; check study/F-1/Ausbildung openness, timeline, or sponsors)."
+      ? "Round 2 of 2: return EXACTLY 2 short clarifyingQuestions (do not repeat topics from userFollowUpAnswers; check study/F-1/Ausbildung openness, timeline, or sponsors)."
       : "Round 1 of 2: return EXACTLY 3 short clarifyingQuestions (2-4 short quickOptions each) covering education, language, and work/study status.";
 
   const profileNuanceRule =
-    "If user is young (18-24), studying, or has no bachelor's degree, actively include study/training visas (F-1 + OPT / J-1 in US, paid Ausbildung / Studienvisum in Germany, Study Permit in Canada, Student 500 in Australia, UK Student/Graduate, NL Study) in the route or alternativeVisas, noting scholarship/sponsor nuances when budget is low.";
+    "If user is young (18-24), studying, or has no bachelor's degree, actively include study/training visas (F-1 + OPT / J-1 in US, Ausbildung / Studienvisum in Germany, Study Permit in Canada, Student 500 in Australia, UK Student/Graduate, NL Study) in the route or alternativeVisas, noting scholarship/sponsor nuances when budget is low.";
 
   const systemInstruction = [
-    "You are a concise visa & immigration assistant inside Esurpys.",
+    "You are a fast, concise visa assistant inside Esurpys.",
     `Respond strictly in ${lang === "ru" ? "Russian" : "English"}.`,
-    "Keep every field ultra-concise (1 short sentence per item) so JSON stays compact and fast.",
+    "Keep every field ultra-short and crisp so JSON returns quickly.",
     coverageRule,
     questionCountRule,
     profileNuanceRule,
-    "Never guarantee approval. For financialOverview mention only brief proof-of-funds/fee expectations (no multi-item budget).",
+    "Never guarantee approval. Keep financialOverview to 1 brief sentence on proof-of-funds/fees.",
   ].join(" ");
 
-  const prompt = JSON.stringify({
+  const promptPayload = {
     mode,
     round,
     target: { countryCode, countryName },
     userNote: userNote || undefined,
-    questionnaireAnswers: answers,
-    deterministicMatches: routesSummary,
-    userFollowUpAnswers: followUpAnswers,
-  });
-
-  const contents = `Analyze profile:\n${prompt}`;
-
-  async function callModel(modelName: PreferredModel) {
-    const response = await ai.models.generateContent({
-      model: modelName,
-      contents,
-      config: {
-        systemInstruction,
-        responseMimeType: "application/json",
-        responseSchema: RESPONSE_SCHEMA,
-        ...(modelName === "gemini-4-hydrogen"
-          ? { thinkingConfig: { thinkingLevel: ThinkingLevel.LOW } }
-          : {}),
-      },
-    });
-    const rawText = (response.text ?? "").trim();
-    if (!rawText) {
-      throw new Error("Empty response from AI.");
-    }
-    return JSON.parse(rawText);
-  }
-
-  let lastErrorMessage = "Failed to generate AI advice.";
+    answers,
+    matches: routesSummary,
+    followUps: followUpAnswers,
+  };
 
   try {
-    const parsed = await callModel(primaryModel);
+    const response = await withTimeout(
+      ai.models.generateContent({
+        model: modelName,
+        contents: `Analyze:\n${JSON.stringify(promptPayload)}`,
+        config: {
+          systemInstruction,
+          responseMimeType: "application/json",
+          responseSchema: RESPONSE_SCHEMA,
+          ...(modelName === "gemini-4-hydrogen"
+            ? { thinkingConfig: { thinkingLevel: ThinkingLevel.LOW } }
+            : {}),
+        },
+      }),
+      SINGLE_CALL_TIMEOUT_MS
+    );
+
+    const rawText = (response.text ?? "").trim();
+    if (!rawText) {
+      throw new Error("502 Empty response from AI.");
+    }
+
+    const parsed = parseAiJson(rawText);
     return NextResponse.json(parsed);
   } catch (err: unknown) {
-    lastErrorMessage =
+    const rawMessage =
       err instanceof Error ? err.message : "Failed to generate AI advice.";
-    console.error(`[ai-advisor] ${primaryModel} failed:`, lastErrorMessage);
+    console.error(`[ai-advisor] ${modelName} failed:`, rawMessage);
 
-    const elapsedMs = Date.now() - startedAt;
-    if (isTransientError(lastErrorMessage) && elapsedMs < 3500) {
-      try {
-        const parsedFallback = await callModel(fallbackModel);
-        return NextResponse.json(parsedFallback);
-      } catch (fallbackErr: unknown) {
-        lastErrorMessage =
-          fallbackErr instanceof Error
-            ? fallbackErr.message
-            : "Fallback model failed.";
-        console.error(
-          `[ai-advisor] ${fallbackModel} failed:`,
-          lastErrorMessage
-        );
-      }
-    }
+    const formatted = formatFriendlyError(rawMessage, lang);
+    return NextResponse.json(
+      {
+        error: formatted.message,
+        retryable: formatted.retryable,
+        model: modelName,
+      },
+      { status: formatted.status }
+    );
   }
-
-  const formatted = formatFriendlyError(lastErrorMessage, lang);
-  return NextResponse.json(
-    { error: formatted.message },
-    { status: formatted.status }
-  );
 }

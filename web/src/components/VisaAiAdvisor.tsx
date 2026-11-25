@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 export type AiRouteInput = {
   name: string;
@@ -9,11 +9,29 @@ export type AiRouteInput = {
   warning?: string;
 };
 
-type ClarifyingQuestion = {
+type AiTopRoute = {
+  country?: string;
+  name: string;
+  alternativeVisas?: string;
+  matchPercent: number;
+  why: string;
+};
+
+type AiQuestion = {
   id: string;
   question: string;
   hint: string;
   quickOptions: string[];
+};
+
+type AiAdvisorResult = {
+  headline: string;
+  verdict: string;
+  topRoutes: AiTopRoute[];
+  importantNuances: string[];
+  financialOverview: string;
+  clarifyingQuestions: AiQuestion[];
+  nextSteps: string[];
 };
 
 type FollowUpQA = {
@@ -21,39 +39,38 @@ type FollowUpQA = {
   answer: string;
 };
 
-type AiAdvisorResult = {
-  headline: string;
-  verdict: string;
-  topRoutes: Array<{
-    country?: string;
-    name: string;
-    alternativeVisas?: string;
-    matchPercent: number;
-    why: string;
-  }>;
-  importantNuances: string[];
-  financialOverview: string;
-  clarifyingQuestions: ClarifyingQuestion[];
-  nextSteps: string[];
-  disclaimer: string;
-};
+type PreferredModel = "gemini-4-hydrogen" | "gemini-3.1-flash-lite";
 
 type VisaAiAdvisorProps = {
   lang: "ru" | "en";
   mode: "world" | "country";
-  countryCode?: string;
-  countryName?: string;
+  countryCode: string;
+  countryName: string;
   answers: Record<string, string>;
   routesSummary: AiRouteInput[];
 };
 
 const MAX_ROUNDS = 2;
 
-const WAVE_MODELS = [
+const WAVE_DELAYS_MS = [0, 900, 1800, 3000, 4500, 6500] as const;
+
+const MODELS_DEFAULT: readonly PreferredModel[] = [
   "gemini-4-hydrogen",
   "gemini-3.1-flash-lite",
   "gemini-4-hydrogen",
-] as const;
+  "gemini-3.1-flash-lite",
+  "gemini-4-hydrogen",
+  "gemini-3.1-flash-lite",
+];
+
+const MODELS_LITE_FIRST: readonly PreferredModel[] = [
+  "gemini-3.1-flash-lite",
+  "gemini-4-hydrogen",
+  "gemini-3.1-flash-lite",
+  "gemini-4-hydrogen",
+  "gemini-3.1-flash-lite",
+  "gemini-4-hydrogen",
+];
 
 const TEXT = {
   ru: {
@@ -64,13 +81,14 @@ const TEXT = {
     notePlaceholder:
       "Например: 20 лет, программист из РФ, учусь, мало денег (интересует в т.ч. учёба/F-1)...",
     startBtn: "Спросить ИИ",
+    cancelBtn: "Отменить",
     nextRoundBtn: "Перейти к раунду 2 (уточнить детали) →",
     finishBtn: "Получить итоговый разбор →",
     retryBtn: "Повторить сейчас",
     loading: "ИИ анализирует профиль...",
-    retrying: "Переключаюсь на резервную модель",
+    retrying: "Высокая нагрузка на Google ИИ — пробую резервный канал",
     timeoutError:
-      "Сервер не успел ответить за 10 секунд (таймаут Vercel). Нажмите «Повторить сейчас».",
+      "Сервер не успел ответить за отведённое время. Нажмите «Повторить сейчас».",
     topRoutesWorld: "Оценка по всем 6 странам (в %)",
     topRoutesCountry: "Подходящие маршруты по стране (в %)",
     altVisasLabel: "Также рассмотреть:",
@@ -87,6 +105,8 @@ const TEXT = {
     nextSteps: "Ближайшие практические шаги",
     proTeaser:
       "Позже в Pro-версии: пошаговый калькулятор бюджета переезда, углублённый ИИ-разбор сложных кейсов и готовый PDF-отчёт.",
+    disclaimer:
+      "ИИ-разбор носит справочный характер, не гарантирует одобрение визы и не заменяет консультацию лицензированного иммиграционного юриста. Проверяйте актуальные пороги на официальных правительственных порталах.",
     errorPrefix: "Ошибка: ",
   },
   en: {
@@ -97,13 +117,14 @@ const TEXT = {
     notePlaceholder:
       "Example: 20yo software developer, student, limited budget (also open to F-1 / study)...",
     startBtn: "Ask AI Advisor",
+    cancelBtn: "Cancel",
     nextRoundBtn: "Continue to Round 2 →",
     finishBtn: "Get Final Analysis →",
     retryBtn: "Retry now",
     loading: "AI is analyzing your profile...",
-    retrying: "Switching to backup model",
+    retrying: "Google AI is busy — switching to backup channel",
     timeoutError:
-      "The server timed out after 10 seconds. Please click Retry now.",
+      "The server did not respond in time. Please click Retry now.",
     topRoutesWorld: "Match Across All 6 Countries (%)",
     topRoutesCountry: "Matching Routes for This Country (%)",
     altVisasLabel: "Also consider:",
@@ -120,6 +141,8 @@ const TEXT = {
     nextSteps: "Immediate Next Steps",
     proTeaser:
       "Coming later in Pro: full moving budget calculator, deep complex-case AI mode, and PDF preliminary report.",
+    disclaimer:
+      "This AI summary is informational only, does not guarantee visa approval, and is not legal advice. Always verify current eligibility rules on official government websites.",
     errorPrefix: "Error: ",
   },
 } as const;
@@ -140,8 +163,23 @@ function percentBarColor(pct: number): string {
   return "from-slate-500 to-slate-400";
 }
 
-function wait(ms: number) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
+function waitWithSignal(ms: number, signal: AbortSignal): Promise<void> {
+  if (ms <= 0) return Promise.resolve();
+  return new Promise((resolve, reject) => {
+    if (signal.aborted) {
+      reject(new DOMException("Aborted", "AbortError"));
+      return;
+    }
+    const timer = window.setTimeout(() => {
+      signal.removeEventListener("abort", onAbort);
+      resolve();
+    }, ms);
+    function onAbort() {
+      window.clearTimeout(timer);
+      reject(new DOMException("Aborted", "AbortError"));
+    }
+    signal.addEventListener("abort", onAbort, { once: true });
+  });
 }
 
 export default function VisaAiAdvisor({
@@ -163,7 +201,27 @@ export default function VisaAiAdvisor({
   const [history, setHistory] = useState<FollowUpQA[]>([]);
   const [followUps, setFollowUps] = useState<Record<string, string>>({});
 
+  const preferLiteRef = useRef(false);
+  const abortControllerRef = useRef<AbortController | null>(null);
+
+  useEffect(() => {
+    return () => {
+      abortControllerRef.current?.abort();
+    };
+  }, []);
+
+  function cancelActiveRequest() {
+    abortControllerRef.current?.abort();
+    abortControllerRef.current = null;
+    setLoading(false);
+    setStatusText(null);
+  }
+
   async function runAdvisor(includeFollowUps: boolean) {
+    abortControllerRef.current?.abort();
+    const controller = new AbortController();
+    abortControllerRef.current = controller;
+
     setLoading(true);
     setError(null);
     setStatusText(t.loading);
@@ -181,18 +239,24 @@ export default function VisaAiAdvisor({
 
     const nextRound = includeFollowUps ? round + 1 : 1;
     const mergedHistory = includeFollowUps ? [...history, ...newEntries] : [];
+    const modelSequence = preferLiteRef.current
+      ? MODELS_LITE_FIRST
+      : MODELS_DEFAULT;
 
     try {
-      for (let i = 0; i < WAVE_MODELS.length; i++) {
-        const preferredModel = WAVE_MODELS[i];
+      for (let i = 0; i < modelSequence.length; i++) {
+        const preferredModel = modelSequence[i];
+        const delayMs = WAVE_DELAYS_MS[i] ?? 4000;
+
         if (i > 0) {
-          setStatusText(`${t.retrying} (${i + 1}/${WAVE_MODELS.length})...`);
-          await wait(1200);
+          setStatusText(`${t.retrying} (${i + 1}/${modelSequence.length})...`);
+          await waitWithSignal(delayMs, controller.signal);
         }
 
         const response = await fetch("/api/ai-advisor", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
+          signal: controller.signal,
           body: JSON.stringify({
             lang,
             mode,
@@ -202,25 +266,56 @@ export default function VisaAiAdvisor({
             preferredModel,
             answers,
             userNote,
-            routesSummary,
+            routesSummary: routesSummary.slice(0, 6).map((r) => ({
+              name: r.name,
+              score: r.score,
+            })),
             followUpAnswers: mergedHistory,
           }),
         });
 
         const rawText = await response.text();
-        let data: (AiAdvisorResult & { error?: string }) | null = null;
+        let data: (Partial<AiAdvisorResult> & {
+          error?: string;
+          retryable?: boolean;
+        }) | null = null;
+
         try {
-          data = JSON.parse(rawText) as AiAdvisorResult & { error?: string };
+          data = JSON.parse(rawText) as Partial<AiAdvisorResult> & {
+            error?: string;
+            retryable?: boolean;
+          };
         } catch {
           data = null;
         }
 
         if (response.ok && data) {
-          setResult(data);
+          preferLiteRef.current = preferredModel === "gemini-3.1-flash-lite";
+          const normalized: AiAdvisorResult = {
+            headline: String(data.headline ?? ""),
+            verdict: String(data.verdict ?? ""),
+            topRoutes: Array.isArray(data.topRoutes) ? data.topRoutes : [],
+            importantNuances: Array.isArray(data.importantNuances)
+              ? data.importantNuances
+              : [],
+            financialOverview: String(data.financialOverview ?? ""),
+            clarifyingQuestions: Array.isArray(data.clarifyingQuestions)
+              ? data.clarifyingQuestions
+              : [],
+            nextSteps: Array.isArray(data.nextSteps) ? data.nextSteps : [],
+          };
+          setResult(normalized);
           setRound(nextRound);
           setHistory(mergedHistory);
           setFollowUps({});
           return;
+        }
+
+        if (
+          preferredModel === "gemini-4-hydrogen" &&
+          response.status === 503
+        ) {
+          preferLiteRef.current = true;
         }
 
         const errorMsg =
@@ -230,21 +325,27 @@ export default function VisaAiAdvisor({
             : `HTTP ${response.status}`);
 
         const isRetryable =
-          [502, 503, 504].includes(response.status) &&
+          (data?.retryable ?? [429, 500, 502, 503, 504].includes(response.status)) &&
           !errorMsg.includes("GEMINI_API_KEY") &&
-          i < WAVE_MODELS.length - 1;
+          i < modelSequence.length - 1;
 
         if (!isRetryable) {
           throw new Error(errorMsg);
         }
       }
     } catch (err: unknown) {
+      if (err instanceof DOMException && err.name === "AbortError") {
+        return;
+      }
       setError(
         err instanceof Error ? err.message : "Unexpected error contacting AI."
       );
     } finally {
-      setLoading(false);
-      setStatusText(null);
+      if (abortControllerRef.current === controller) {
+        abortControllerRef.current = null;
+        setLoading(false);
+        setStatusText(null);
+      }
     }
   }
 
@@ -272,14 +373,26 @@ export default function VisaAiAdvisor({
           </p>
         </div>
 
-        <button
-          type="button"
-          disabled={loading}
-          onClick={() => runAdvisor(false)}
-          className="shrink-0 rounded-xl bg-gradient-to-r from-cyan-400 to-blue-500 px-5 py-3 text-sm font-semibold text-slate-950 shadow-lg shadow-cyan-950/30 transition hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
-        >
-          {loading ? statusText ?? t.loading : t.startBtn}
-        </button>
+        <div className="flex shrink-0 items-center gap-2">
+          <button
+            type="button"
+            disabled={loading}
+            onClick={() => runAdvisor(false)}
+            className="rounded-xl bg-gradient-to-r from-cyan-400 to-blue-500 px-5 py-3 text-sm font-semibold text-slate-950 shadow-lg shadow-cyan-950/30 transition hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            {loading ? statusText ?? t.loading : t.startBtn}
+          </button>
+
+          {loading && (
+            <button
+              type="button"
+              onClick={cancelActiveRequest}
+              className="rounded-xl border border-slate-700 bg-slate-900/90 px-3.5 py-3 text-xs font-semibold text-slate-300 transition hover:border-slate-500 hover:text-white"
+            >
+              {t.cancelBtn}
+            </button>
+          )}
+        </div>
       </div>
 
       <div className="mt-4">
@@ -287,6 +400,12 @@ export default function VisaAiAdvisor({
           type="text"
           value={userNote}
           onChange={(e) => setUserNote(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter" && !loading) {
+              e.preventDefault();
+              void runAdvisor(false);
+            }
+          }}
           placeholder={t.notePlaceholder}
           className="w-full rounded-xl border border-white/10 bg-slate-950/80 px-4 py-3 text-sm text-white placeholder:text-slate-500 focus:border-cyan-400 focus:outline-none"
         />
@@ -349,7 +468,7 @@ export default function VisaAiAdvisor({
                   const currentVal = followUps[q.id] ?? "";
                   return (
                     <div
-                      key={q.id}
+                      key={`${index}-${q.id}`}
                       className="rounded-xl border border-white/10 bg-slate-900/80 p-4"
                     >
                       <div className="mb-1.5 flex items-center justify-between gap-2">
@@ -369,13 +488,13 @@ export default function VisaAiAdvisor({
                       </p>
                       <p className="mt-1 text-xs text-slate-400">{q.hint}</p>
 
-                      {q.quickOptions.length > 0 && (
+                      {Array.isArray(q.quickOptions) && q.quickOptions.length > 0 && (
                         <div className="mt-3 flex flex-wrap gap-2">
-                          {q.quickOptions.map((option) => {
+                          {q.quickOptions.map((option, optIdx) => {
                             const active = currentVal === option;
                             return (
                               <button
-                                key={option}
+                                key={`${optIdx}-${option}`}
                                 type="button"
                                 onClick={() =>
                                   setFollowUps((prev) => ({
@@ -448,14 +567,14 @@ export default function VisaAiAdvisor({
                 {mode === "world" ? t.topRoutesWorld : t.topRoutesCountry}
               </h3>
               <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-                {result.topRoutes.map((route) => {
+                {result.topRoutes.map((route, idx) => {
                   const pct = Math.max(
                     0,
                     Math.min(100, Math.round(Number(route.matchPercent) || 0))
                   );
                   return (
                     <div
-                      key={`${route.country ?? ""}-${route.name}`}
+                      key={`${idx}-${route.country ?? ""}-${route.name}`}
                       className="rounded-2xl border border-white/10 bg-slate-950/60 p-4"
                     >
                       <div className="flex items-start justify-between gap-2">
@@ -512,9 +631,9 @@ export default function VisaAiAdvisor({
                 {t.nuances}
               </h3>
               <ul className="mt-3 space-y-2">
-                {result.importantNuances.map((item) => (
+                {result.importantNuances.map((item, idx) => (
                   <li
-                    key={item}
+                    key={`${idx}-${item}`}
                     className="flex gap-2 text-sm leading-6 text-slate-300"
                   >
                     <span className="text-amber-400">•</span>
@@ -530,9 +649,9 @@ export default function VisaAiAdvisor({
                   {t.nextSteps}
                 </h3>
                 <ul className="mt-3 space-y-2">
-                  {result.nextSteps.map((step) => (
+                  {result.nextSteps.map((step, idx) => (
                     <li
-                      key={step}
+                      key={`${idx}-${step}`}
                       className="flex gap-2 text-sm leading-6 text-slate-300"
                     >
                       <span className="text-emerald-400">→</span>
@@ -557,9 +676,7 @@ export default function VisaAiAdvisor({
             {t.proTeaser}
           </div>
 
-          <p className="text-xs leading-5 text-slate-500">
-            {result.disclaimer}
-          </p>
+          <p className="text-xs leading-5 text-slate-500">{t.disclaimer}</p>
         </div>
       )}
     </section>
