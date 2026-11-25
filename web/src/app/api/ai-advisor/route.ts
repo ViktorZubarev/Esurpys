@@ -31,7 +31,7 @@ type AdvisorRequestBody = {
 };
 
 const RATE_WINDOW_MS = 60_000;
-const MAX_REQUESTS_PER_WINDOW = 10;
+const MAX_REQUESTS_PER_WINDOW = 20;
 const ipHits = new Map<string, number[]>();
 
 function isRateLimited(ip: string): boolean {
@@ -235,8 +235,8 @@ function formatFriendlyError(
       status: 503,
       message:
         lang === "ru"
-          ? "Серверы Google ИИ временно перегружены (503). Нажмите кнопку ещё раз через пару секунд."
-          : "Google AI servers are temporarily busy (503). Please try again in a few seconds.",
+          ? "Серверы Google ИИ временно перегружены (503). Нажмите кнопку ниже, чтобы повторить."
+          : "Google AI servers are temporarily busy (503). Please retry below.",
     };
   }
 
@@ -359,8 +359,8 @@ export async function POST(request: NextRequest) {
     delayMs: number;
   }> = [
     { model: "gemini-4-hydrogen", useLowThinking: true, delayMs: 0 },
-    { model: "gemini-3.1-flash-lite", useLowThinking: false, delayMs: 900 },
-    { model: "gemini-4-hydrogen", useLowThinking: true, delayMs: 1800 },
+    { model: "gemini-3.1-flash-lite", useLowThinking: false, delayMs: 800 },
+    { model: "gemini-4-hydrogen", useLowThinking: false, delayMs: 1400 },
   ];
 
   let lastErrorMessage = "Failed to generate AI advice.";

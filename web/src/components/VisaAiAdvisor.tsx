@@ -60,7 +60,9 @@ const TEXT = {
     startBtn: "Спросить ИИ",
     nextRoundBtn: "Перейти к раунду 2 (уточнить детали) →",
     finishBtn: "Получить итоговый разбор →",
+    retryBtn: "Повторить сейчас",
     loading: "ИИ анализирует профиль...",
+    retrying: "Серверы Google заняты, повторяю запрос",
     topRoutesWorld: "Оценка по всем 6 странам (в %)",
     topRoutesCountry: "Подходящие маршруты по стране (в %)",
     altVisasLabel: "Также рассмотреть:",
@@ -89,7 +91,9 @@ const TEXT = {
     startBtn: "Ask AI Advisor",
     nextRoundBtn: "Continue to Round 2 →",
     finishBtn: "Get Final Analysis →",
+    retryBtn: "Retry now",
     loading: "AI is analyzing your profile...",
+    retrying: "Google servers are busy, retrying",
     topRoutesWorld: "Match Across All 6 Countries (%)",
     topRoutesCountry: "Matching Routes for This Country (%)",
     altVisasLabel: "Also consider:",
@@ -126,6 +130,10 @@ function percentBarColor(pct: number): string {
   return "from-slate-500 to-slate-400";
 }
 
+function wait(ms: number) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 export default function VisaAiAdvisor({
   lang,
   mode,
@@ -137,7 +145,9 @@ export default function VisaAiAdvisor({
   const t = TEXT[lang];
   const [userNote, setUserNote] = useState("");
   const [loading, setLoading] = useState(false);
+  const [statusText, setStatusText] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [lastIncludeFollowUps, setLastIncludeFollowUps] = useState(false);
   const [result, setResult] = useState<AiAdvisorResult | null>(null);
   const [round, setRound] = useState(1);
   const [history, setHistory] = useState<FollowUpQA[]>([]);
@@ -146,6 +156,8 @@ export default function VisaAiAdvisor({
   async function runAdvisor(includeFollowUps: boolean) {
     setLoading(true);
     setError(null);
+    setStatusText(t.loading);
+    setLastIncludeFollowUps(includeFollowUps);
 
     const newEntries: FollowUpQA[] =
       includeFollowUps && result
@@ -160,40 +172,61 @@ export default function VisaAiAdvisor({
     const nextRound = includeFollowUps ? round + 1 : 1;
     const mergedHistory = includeFollowUps ? [...history, ...newEntries] : [];
 
+    const payload = JSON.stringify({
+      lang,
+      mode,
+      countryCode,
+      countryName,
+      round: nextRound,
+      answers,
+      userNote,
+      routesSummary,
+      followUpAnswers: mergedHistory,
+    });
+
+    const maxWaves = 3;
+
     try {
-      const response = await fetch("/api/ai-advisor", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          lang,
-          mode,
-          countryCode,
-          countryName,
-          round: nextRound,
-          answers,
-          userNote,
-          routesSummary,
-          followUpAnswers: mergedHistory,
-        }),
-      });
+      for (let wave = 1; wave <= maxWaves; wave++) {
+        if (wave > 1) {
+          setStatusText(`${t.retrying} (${wave}/${maxWaves})...`);
+          await wait(2400);
+        }
 
-      const data = (await response.json()) as AiAdvisorResult & {
-        error?: string;
-      };
-      if (!response.ok) {
-        throw new Error(data.error || `HTTP ${response.status}`);
+        const response = await fetch("/api/ai-advisor", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: payload,
+        });
+
+        const data = (await response.json()) as AiAdvisorResult & {
+          error?: string;
+        };
+
+        if (response.ok) {
+          setResult(data);
+          setRound(nextRound);
+          setHistory(mergedHistory);
+          setFollowUps({});
+          return;
+        }
+
+        const canRetryWave =
+          response.status === 503 &&
+          !data.error?.includes("GEMINI_API_KEY") &&
+          wave < maxWaves;
+
+        if (!canRetryWave) {
+          throw new Error(data.error || `HTTP ${response.status}`);
+        }
       }
-
-      setResult(data);
-      setRound(nextRound);
-      setHistory(mergedHistory);
-      setFollowUps({});
     } catch (err: unknown) {
       setError(
         err instanceof Error ? err.message : "Unexpected error contacting AI."
       );
     } finally {
       setLoading(false);
+      setStatusText(null);
     }
   }
 
@@ -227,7 +260,7 @@ export default function VisaAiAdvisor({
           onClick={() => runAdvisor(false)}
           className="shrink-0 rounded-xl bg-gradient-to-r from-cyan-400 to-blue-500 px-5 py-3 text-sm font-semibold text-slate-950 shadow-lg shadow-cyan-950/30 transition hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
         >
-          {loading ? t.loading : t.startBtn}
+          {loading ? statusText ?? t.loading : t.startBtn}
         </button>
       </div>
 
@@ -242,9 +275,19 @@ export default function VisaAiAdvisor({
       </div>
 
       {error && (
-        <div className="mt-4 rounded-2xl border border-rose-500/30 bg-rose-500/10 p-4 text-sm leading-6 text-rose-200">
-          {t.errorPrefix}
-          {error}
+        <div className="mt-4 flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-rose-500/30 bg-rose-500/10 p-4 text-sm leading-6 text-rose-200">
+          <span>
+            {t.errorPrefix}
+            {error}
+          </span>
+          <button
+            type="button"
+            disabled={loading}
+            onClick={() => runAdvisor(lastIncludeFollowUps)}
+            className="shrink-0 rounded-lg border border-rose-400/40 bg-rose-500/20 px-3 py-1.5 text-xs font-semibold text-rose-100 transition hover:bg-rose-500/30 disabled:opacity-50"
+          >
+            {t.retryBtn}
+          </button>
         </div>
       )}
 
@@ -369,7 +412,7 @@ export default function VisaAiAdvisor({
                 }`}
               >
                 {loading
-                  ? t.loading
+                  ? statusText ?? t.loading
                   : round < MAX_ROUNDS
                   ? t.nextRoundBtn
                   : t.finishBtn}
