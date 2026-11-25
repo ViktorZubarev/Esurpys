@@ -27,6 +27,7 @@ type AiAdvisorResult = {
   topRoutes: Array<{
     country?: string;
     name: string;
+    alternativeVisas?: string;
     matchPercent: number;
     why: string;
   }>;
@@ -53,18 +54,21 @@ const TEXT = {
     badge: "БЕСПЛАТНЫЙ ИИ-СОВЕТНИК",
     title: "ИИ-подбор виз и важные нюансы",
     subtitle:
-      "Опишите ситуацию в двух словах или сразу нажмите кнопку — ИИ оценит шансы в процентах по всем 6 странам и задаст 3 коротких уточняющих вопроса (максимум 2 раунда).",
+      "Опишите ситуацию в двух словах или сразу нажмите кнопку — ИИ оценит шансы в процентах по всем 6 странам и проведёт 2 коротких раунда уточняющих вопросов.",
     notePlaceholder:
-      "Например: 20 лет, программист из РФ, опыт 1 год, бюджет небольшой...",
+      "Например: 20 лет, программист из РФ, учусь, мало денег (интересует в т.ч. учёба/F-1)...",
     startBtn: "Спросить ИИ",
-    refreshBtn: "Обновить разбор с учётом ответов",
+    nextRoundBtn: "Перейти к раунду 2 (уточнить детали) →",
+    finishBtn: "Получить итоговый разбор →",
     loading: "ИИ анализирует профиль...",
     topRoutesWorld: "Оценка по всем 6 странам (в %)",
     topRoutesCountry: "Подходящие маршруты по стране (в %)",
+    altVisasLabel: "Также рассмотреть:",
     nuances: "Важные нюансы и подводные камни",
     finance: "Финансовые требования (ориентир)",
     questionsTitle: "Уточняющие вопросы от ИИ",
-    questionsDone: "Все уточняющие вопросы заданы — итоговый разбор готов.",
+    questionsDone: "Оба раунда вопросов пройдены — ниже ваш итоговый разбор.",
+    readyHint: "Ответы выбраны — нажмите кнопку внизу, чтобы продолжить.",
     roundLabel: "Раунд",
     ofLabel: "из",
     answeredLabel: "Отвечено",
@@ -79,18 +83,21 @@ const TEXT = {
     badge: "FREE AI ADVISOR",
     title: "AI Visa Match & Key Nuances",
     subtitle:
-      "Describe your situation briefly or click the button — AI estimates percentage fit across all 6 countries and asks 3 targeted follow-up questions (up to 2 rounds max).",
+      "Describe your situation briefly or click the button — AI estimates percentage fit across all 6 countries and runs 2 short rounds of clarifying questions.",
     notePlaceholder:
-      "Example: 20yo software developer, 1 year experience, limited savings...",
+      "Example: 20yo software developer, student, limited budget (also open to F-1 / study)...",
     startBtn: "Ask AI Advisor",
-    refreshBtn: "Update analysis with answers",
+    nextRoundBtn: "Continue to Round 2 →",
+    finishBtn: "Get Final Analysis →",
     loading: "AI is analyzing your profile...",
     topRoutesWorld: "Match Across All 6 Countries (%)",
     topRoutesCountry: "Matching Routes for This Country (%)",
+    altVisasLabel: "Also consider:",
     nuances: "Important Nuances & Pitfalls",
     finance: "Financial Expectations (High-Level)",
     questionsTitle: "Clarifying Questions from AI",
-    questionsDone: "All clarifying rounds complete — final breakdown is ready.",
+    questionsDone: "Both clarifying rounds complete — final breakdown is below.",
+    readyHint: "Answers selected — click the button below to continue.",
     roundLabel: "Round",
     ofLabel: "of",
     answeredLabel: "Answered",
@@ -150,7 +157,7 @@ export default function VisaAiAdvisor({
             .filter((item) => item.answer.length > 0)
         : [];
 
-    const nextRound = includeFollowUps ? Math.min(MAX_ROUNDS, round + 1) : 1;
+    const nextRound = includeFollowUps ? round + 1 : 1;
     const mergedHistory = includeFollowUps ? [...history, ...newEntries] : [];
 
     try {
@@ -197,6 +204,7 @@ export default function VisaAiAdvisor({
   ).length;
   const questionsProgress =
     totalQuestions > 0 ? Math.round((answeredCount / totalQuestions) * 100) : 0;
+  const displayRound = Math.min(round, MAX_ROUNDS);
 
   return (
     <section className="rounded-3xl border border-cyan-400/30 bg-gradient-to-br from-slate-900 via-slate-900 to-cyan-950/30 p-5 shadow-xl shadow-black/25 sm:p-6">
@@ -257,7 +265,7 @@ export default function VisaAiAdvisor({
                     {t.questionsTitle}
                   </h3>
                   <p className="mt-1 text-xs text-slate-400">
-                    {t.roundLabel} {round} {t.ofLabel} {MAX_ROUNDS} ·{" "}
+                    {t.roundLabel} {displayRound} {t.ofLabel} {MAX_ROUNDS} ·{" "}
                     {t.answeredLabel}: {answeredCount} {t.ofLabel}{" "}
                     {totalQuestions}
                   </p>
@@ -344,13 +352,27 @@ export default function VisaAiAdvisor({
                 })}
               </div>
 
+              {answeredCount === totalQuestions && (
+                <p className="mt-4 text-xs font-medium text-emerald-300">
+                  ✓ {t.readyHint}
+                </p>
+              )}
+
               <button
                 type="button"
                 disabled={loading || answeredCount === 0}
                 onClick={() => runAdvisor(true)}
-                className="mt-4 rounded-xl border border-cyan-400/40 bg-cyan-500/15 px-5 py-2.5 text-sm font-semibold text-cyan-200 transition hover:bg-cyan-500/25 disabled:cursor-not-allowed disabled:opacity-40"
+                className={`mt-3 rounded-xl px-5 py-3 text-sm font-semibold transition disabled:cursor-not-allowed disabled:opacity-40 ${
+                  answeredCount === totalQuestions
+                    ? "bg-gradient-to-r from-cyan-400 to-blue-500 text-slate-950 shadow-lg shadow-cyan-950/30 hover:opacity-90"
+                    : "border border-cyan-400/40 bg-cyan-500/15 text-cyan-200 hover:bg-cyan-500/25"
+                }`}
               >
-                {loading ? t.loading : t.refreshBtn}
+                {loading
+                  ? t.loading
+                  : round < MAX_ROUNDS
+                  ? t.nextRoundBtn
+                  : t.finishBtn}
               </button>
             </div>
           ) : (
@@ -407,6 +429,15 @@ export default function VisaAiAdvisor({
                       <p className="mt-2.5 text-xs leading-5 text-slate-300">
                         {route.why}
                       </p>
+
+                      {route.alternativeVisas && (
+                        <p className="mt-2 text-[11px] leading-4 text-cyan-300/90">
+                          <span className="text-slate-400">
+                            {t.altVisasLabel}{" "}
+                          </span>
+                          {route.alternativeVisas}
+                        </p>
+                      )}
                     </div>
                   );
                 })}

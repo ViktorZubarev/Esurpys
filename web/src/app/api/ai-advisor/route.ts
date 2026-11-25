@@ -121,14 +121,25 @@ const RESPONSE_SCHEMA = {
             type: Type.STRING,
             description: "Best matching visa/route name for that country.",
           },
+          alternativeVisas: {
+            type: Type.STRING,
+            description:
+              "1-3 alternative visa codes worth checking in this country (e.g. 'F-1, J-1, O-1' or 'Ausbildung, Студенческая').",
+          },
           matchPercent: {
             type: Type.INTEGER,
             description:
-              "Estimated compatibility percentage from 5 to 95 (integer only, never text).",
+              "Estimated compatibility percentage from 5 to 95 (integer only).",
           },
           why: { type: Type.STRING },
         },
-        required: ["country", "name", "matchPercent", "why"],
+        required: [
+          "country",
+          "name",
+          "alternativeVisas",
+          "matchPercent",
+          "why",
+        ],
       },
     },
     importantNuances: {
@@ -157,7 +168,7 @@ const RESPONSE_SCHEMA = {
         },
         required: ["id", "question", "hint", "quickOptions"],
       },
-      description: "Targeted follow-up questions (empty array if no more needed).",
+      description: "Targeted follow-up questions (empty array if round >= 3).",
     },
     nextSteps: {
       type: Type.ARRAY,
@@ -224,8 +235,8 @@ function formatFriendlyError(
       status: 503,
       message:
         lang === "ru"
-          ? "Серверы Google ИИ временно перегружены (503). Нажмите «Спросить ИИ» ещё раз через пару секунд."
-          : "Google AI servers are temporarily busy (503). Please click Ask AI again in a few seconds.",
+          ? "Серверы Google ИИ временно перегружены (503). Нажмите кнопку ещё раз через пару секунд."
+          : "Google AI servers are temporarily busy (503). Please try again in a few seconds.",
     };
   }
 
@@ -300,25 +311,29 @@ export async function POST(request: NextRequest) {
   const coverageRule =
     mode === "world"
       ? lang === "ru"
-        ? "In topRoutes you MUST evaluate and return ALL 6 countries of this platform: Германия, Нидерланды, Великобритания, Канада, Австралия, США — sorted from highest matchPercent to lowest, showing the best candidate visa for each country and an honest matchPercent (5 to 95)."
-        : "In topRoutes you MUST evaluate and return ALL 6 countries of this platform: Germany, Netherlands, United Kingdom, Canada, Australia, United States — sorted from highest matchPercent to lowest, showing the best candidate visa for each country and an honest matchPercent (5 to 95)."
+        ? "In topRoutes you MUST evaluate and return ALL 6 countries of this platform: Германия, Нидерланды, Великобритания, Канада, Австралия, США — sorted from highest matchPercent to lowest."
+        : "In topRoutes you MUST evaluate and return ALL 6 countries of this platform: Germany, Netherlands, United Kingdom, Canada, Australia, United States — sorted from highest matchPercent to lowest."
       : `In topRoutes return 4 to 6 specific visa routes for ${countryName}, sorted from highest matchPercent (5 to 95) to lowest.`;
 
   const questionCountRule =
-    round >= 2
-      ? "This is the final round (round >= 2). Return an EMPTY clarifyingQuestions array [] because all key clarifications are complete."
-      : followUpAnswers.length === 0
-      ? "Return EXACTLY 3 targeted clarifyingQuestions (each with 2-4 short quickOptions) to narrow down the best options."
-      : "Return 1 to 2 final high-value clarifyingQuestions (only if critical information is still missing; never repeat questions already answered in userFollowUpAnswers).";
+    round >= 3
+      ? "This is the final wrap-up (round >= 3). Return an EMPTY clarifyingQuestions array [] because both rounds of clarifying questions are complete."
+      : round === 2
+      ? "This is Round 2 of 2. Ask EXACTLY 2 deeper clarifyingQuestions (do NOT repeat any topic already answered in userFollowUpAnswers; focus on willingness to study/F-1/Ausbildung vs job search, timeline, or portfolio/sponsors)."
+      : "This is Round 1 of 2. Return EXACTLY 3 targeted clarifyingQuestions (each with 2-4 short quickOptions) to identify education, language, and work/study status.";
+
+  const profileNuanceRule =
+    "IMPORTANT: When the user is young (e.g. 18-24), currently studying, or lacks a completed university degree, do NOT ignore study/training/exchange visas. Actively include options like F-1 Student (with OPT) and J-1 in the US, paid Ausbildung or Studienvisum in Germany, Study Permit + PGWP in Canada, Student Visa 500 in Australia, UK Student/Graduate, and NL Study/Orientation Year — either as the top route or clearly in alternativeVisas, noting scholarships/sponsors or paid training when funds are limited.";
 
   const systemInstruction = [
     "You are an immigration & visa information assistant inside the Esurpys navigator app.",
     `Respond strictly in ${lang === "ru" ? "Russian" : "English"}.`,
     coverageRule,
     questionCountRule,
-    "Stay grounded in the user's questionnaire answers, userNote, follow-up answers, and deterministic route scores.",
+    profileNuanceRule,
+    "Stay grounded in the user's questionnaire answers, userNote, userFollowUpAnswers, and deterministic route scores.",
     "Never guarantee visa approval, never invent exact legal fees if uncertain, and never give false citizenship privileges.",
-    "Explain key nuances (employer sponsorship, degree recognition, salary thresholds, visa history, status expiration, age cutoffs).",
+    "Explain key nuances (employer sponsorship, degree recognition, salary thresholds, visa history, status expiration, age cutoffs, proof of funds).",
     "For financialOverview: give only a concise high-level mention of typical proof-of-funds or government fees (do NOT build a multi-item moving budget).",
   ].join(" ");
 
