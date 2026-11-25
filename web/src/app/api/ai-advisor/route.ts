@@ -23,6 +23,7 @@ type AdvisorRequestBody = {
   mode?: "world" | "country";
   countryCode?: string;
   countryName?: string;
+  round?: number;
   answers?: Record<string, string>;
   userNote?: string;
   routesSummary?: RouteSummaryInput[];
@@ -84,7 +85,7 @@ function sanitizeRoutes(raw: unknown): RouteSummaryInput[] {
 function sanitizeFollowUps(raw: unknown): FollowUpInput[] {
   if (!Array.isArray(raw)) return [];
   return raw
-    .slice(0, 6)
+    .slice(0, 10)
     .map((item) => {
       const obj = (item ?? {}) as Record<string, unknown>;
       return {
@@ -112,15 +113,22 @@ const RESPONSE_SCHEMA = {
       items: {
         type: Type.OBJECT,
         properties: {
-          name: { type: Type.STRING },
-          fit: {
+          country: {
             type: Type.STRING,
+            description: "Country name in the response language.",
+          },
+          name: {
+            type: Type.STRING,
+            description: "Best matching visa/route name for that country.",
+          },
+          matchPercent: {
+            type: Type.INTEGER,
             description:
-              "Short status badge like 'High fit', 'Conditional', or 'Low fit'.",
+              "Estimated compatibility percentage from 5 to 95 (integer only, never text).",
           },
           why: { type: Type.STRING },
         },
-        required: ["name", "fit", "why"],
+        required: ["country", "name", "matchPercent", "why"],
       },
     },
     importantNuances: {
@@ -149,8 +157,7 @@ const RESPONSE_SCHEMA = {
         },
         required: ["id", "question", "hint", "quickOptions"],
       },
-      description:
-        "1 to 3 targeted follow-up questions to narrow down visa eligibility.",
+      description: "Targeted follow-up questions (empty array if no more needed).",
     },
     nextSteps: {
       type: Type.ARRAY,
@@ -187,8 +194,13 @@ function isTransientError(message: string): boolean {
   );
 }
 
-function formatFriendlyError(rawMessage: string, lang: AdvisorLang): { status: number; message: string } {
-  const statusMatch = rawMessage.match(/\b(400|401|403|404|429|500|502|503|504)\b/);
+function formatFriendlyError(
+  rawMessage: string,
+  lang: AdvisorLang
+): { status: number; message: string } {
+  const statusMatch = rawMessage.match(
+    /\b(400|401|403|404|429|500|502|503|504)\b/
+  );
   const status = statusMatch ? Number(statusMatch[1]) : 500;
 
   if (rawMessage.includes("User location is not supported")) {
@@ -201,12 +213,16 @@ function formatFriendlyError(rawMessage: string, lang: AdvisorLang): { status: n
     };
   }
 
-  if (status === 503 || rawMessage.includes("UNAVAILABLE") || rawMessage.includes("high demand")) {
+  if (
+    status === 503 ||
+    rawMessage.includes("UNAVAILABLE") ||
+    rawMessage.includes("high demand")
+  ) {
     return {
       status: 503,
       message:
         lang === "ru"
-          ? "Сервер ИИ временно перегружен из-за высокой нагрузки. Попробуйте нажать «Спросить ИИ» ещё раз через несколько секунд."
+          ? "Сервер ИИ временно перегружен. Нажмите «Спросить ИИ» ещё раз через пару секунд."
           : "AI servers are temporarily experiencing high demand. Please try again in a few seconds.",
     };
   }
@@ -216,7 +232,7 @@ function formatFriendlyError(rawMessage: string, lang: AdvisorLang): { status: n
       status: 429,
       message:
         lang === "ru"
-          ? "Превышен бесплатный лимит запросов в минуту. Подождите 30–60 секунд и повторите попытку."
+          ? "Превышен бесплатный лимит запросов в минуту. Подождите 30–60 секунд."
           : "Free-tier rate limit reached. Please wait a minute and try again.",
     };
   }
@@ -264,6 +280,7 @@ export async function POST(request: NextRequest) {
     80
   );
   const countryCode = String(body.countryCode ?? "GLOBAL").slice(0, 16);
+  const round = Math.max(1, Math.min(3, Number(body.round) || 1));
   const answers = sanitizeAnswers(body.answers);
   const userNote = String(body.userNote ?? "").trim().slice(0, 600);
   const routesSummary = sanitizeRoutes(body.routesSummary);
@@ -278,21 +295,35 @@ export async function POST(request: NextRequest) {
     },
   });
 
+  const coverageRule =
+    mode === "world"
+      ? lang === "ru"
+        ? "In topRoutes you MUST evaluate and return ALL 6 countries of this platform: Германия, Нидерланды, Великобритания, Канада, Австралия, США — sorted from highest matchPercent to lowest, showing the best candidate visa for each country and an honest matchPercent (5 to 95)."
+        : "In topRoutes you MUST evaluate and return ALL 6 countries of this platform: Germany, Netherlands, United Kingdom, Canada, Australia, United States — sorted from highest matchPercent to lowest, showing the best candidate visa for each country and an honest matchPercent (5 to 95)."
+      : `In topRoutes return 4 to 6 specific visa routes for ${countryName}, sorted from highest matchPercent (5 to 95) to lowest.`;
+
+  const questionCountRule =
+    round >= 2
+      ? "This is the final round (round >= 2). Return an EMPTY clarifyingQuestions array [] because all key clarifications are complete."
+      : followUpAnswers.length === 0
+      ? "Return EXACTLY 3 targeted clarifyingQuestions (each with 2-4 short quickOptions) to narrow down the best options."
+      : "Return 1 to 2 final high-value clarifyingQuestions (only if critical information is still missing; never repeat questions already answered in userFollowUpAnswers).";
+
   const systemInstruction = [
     "You are an immigration & visa information assistant inside the Esurpys navigator app.",
     `Respond strictly in ${lang === "ru" ? "Russian" : "English"}.`,
-    "Keep responses concise and structured.",
-    "If questionnaireAnswers is empty or sparse, start by briefly listing likely routes for the target country/global options based on userNote and immediately ask 3 high-impact clarifyingQuestions so the user can narrow down options.",
+    coverageRule,
+    questionCountRule,
     "Stay grounded in the user's questionnaire answers, userNote, follow-up answers, and deterministic route scores.",
     "Never guarantee visa approval, never invent exact legal fees if uncertain, and never give false citizenship privileges.",
     "Explain key nuances (employer sponsorship, degree recognition, salary thresholds, visa history, status expiration, age cutoffs).",
     "For financialOverview: give only a concise high-level mention of typical proof-of-funds or government fees (do NOT build a multi-item moving budget).",
-    "Always return 1 to 3 targeted clarifyingQuestions with 2-4 short quickOptions each.",
   ].join(" ");
 
   const prompt = JSON.stringify(
     {
       mode,
+      round,
       target: { countryCode, countryName },
       userNote: userNote || undefined,
       questionnaireAnswers: answers,
@@ -305,7 +336,11 @@ export async function POST(request: NextRequest) {
 
   const contents = `Analyze this immigration profile and return structured guidance:\n\n${prompt}`;
 
-  const attempts: Array<{ model: string; useLowThinking: boolean; delayMs: number }> = [
+  const attempts: Array<{
+    model: string;
+    useLowThinking: boolean;
+    delayMs: number;
+  }> = [
     { model: "gemini-4-hydrogen", useLowThinking: true, delayMs: 0 },
     { model: "gemini-4-hydrogen", useLowThinking: true, delayMs: 700 },
     { model: "gemini-3.1-flash-lite", useLowThinking: false, delayMs: 400 },
@@ -350,5 +385,8 @@ export async function POST(request: NextRequest) {
   }
 
   const formatted = formatFriendlyError(lastErrorMessage, lang);
-  return NextResponse.json({ error: formatted.message }, { status: formatted.status });
+  return NextResponse.json(
+    { error: formatted.message },
+    { status: formatted.status }
+  );
 }
