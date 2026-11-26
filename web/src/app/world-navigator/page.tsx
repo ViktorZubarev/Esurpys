@@ -7,6 +7,7 @@ import { useLanguage } from "@/shared/LanguageProvider";
 import VisaAiAdvisor from "@/components/VisaAiAdvisor";
 import {
   clearWorldProfile,
+  extractWorldAnswersFromNote,
   loadWorldProfile,
   saveWorldProfile,
 } from "@/lib/shared-profile";
@@ -835,10 +836,18 @@ export default function WorldNavigatorPage() {
     setShowResults(false);
   }
 
-  function questionLabel(id: string) {
-    const question = QUESTIONS.find((item) => item.id === id);
-    if (!question) return id;
-    return lang === "ru" ? question.labelRu : question.label;
+  function applyNoteToWorld(note: string) {
+    const extracted = extractWorldAnswersFromNote(note);
+    setAnswers((previous) => {
+      const next: Record<string, Answer> = {
+        ...previous,
+        ...extracted,
+      };
+      saveWorldProfile(next);
+      return next;
+    });
+    setShowAll(true);
+    setShowResults(true);
   }
 
   const aiAdvisorBlock = (
@@ -854,6 +863,7 @@ export default function WorldNavigatorPage() {
           score: item.score,
           warning: item.citizenshipNote,
         }))}
+        onQuickCalculate={applyNoteToWorld}
       />
     </div>
   );

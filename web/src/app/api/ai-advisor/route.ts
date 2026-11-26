@@ -237,8 +237,8 @@ function formatFriendlyError(
       retryable: true,
       message:
         lang === "ru"
-          ? "Серверы Google ИИ временно перегружены (503). Нажмите «Повторить сейчас»."
-          : "Google AI servers are temporarily busy (503). Please click Retry now.",
+          ? "Бесплатные серверы Google ИИ сейчас перегружены (503). Это временная нагрузка на стороне Google — нажмите «Повторить сейчас» или используйте быстрый расчёт по правилам сайта."
+          : "Google AI free-tier servers are currently overloaded (503). Please retry or use instant rule-based calculation below.",
     };
   }
 
@@ -248,8 +248,8 @@ function formatFriendlyError(
       retryable: true,
       message:
         lang === "ru"
-          ? "Модель не успела ответить вовремя. Нажмите «Повторить сейчас»."
-          : "The AI model timed out. Please click Retry now.",
+          ? "Модель не успела ответить вовремя. Нажмите «Повторить сейчас» или используйте расчёт по правилам сайта."
+          : "The AI model timed out. Please retry or use instant rule-based calculation.",
     };
   }
 
@@ -259,8 +259,8 @@ function formatFriendlyError(
       retryable: true,
       message:
         lang === "ru"
-          ? "Временный лимит бесплатного тарифа (429). Подождите 15–30 секунд и повторите."
-          : "Free-tier rate limit reached (429). Please wait 15-30 seconds and retry.",
+          ? "Временный лимит бесплатного тарифа (429). Подождите 15–30 секунд или используйте расчёт по правилам сайта."
+          : "Free-tier rate limit reached (429). Wait 15-30 seconds or use rule-based calculation.",
     };
   }
 
@@ -401,6 +401,7 @@ export async function POST(request: NextRequest) {
         error: formatted.message,
         retryable: formatted.retryable,
         model: modelName,
+        statusCode: formatted.status,
       },
       { status: formatted.status }
     );

@@ -48,18 +48,16 @@ type VisaAiAdvisorProps = {
   countryName: string;
   answers: Record<string, string>;
   routesSummary: AiRouteInput[];
+  onQuickCalculate?: (note: string) => void;
 };
 
 const MAX_ROUNDS = 2;
 
-const WAVE_DELAYS_MS = [0, 900, 1800, 3000, 4500, 6500] as const;
+const WAVE_DELAYS_MS = [0, 800, 1600] as const;
 
 const MODELS_DEFAULT: readonly PreferredModel[] = [
   "gemini-4-hydrogen",
   "gemini-3.1-flash-lite",
-  "gemini-4-hydrogen",
-  "gemini-3.1-flash-lite",
-  "gemini-4-hydrogen",
   "gemini-3.1-flash-lite",
 ];
 
@@ -67,9 +65,6 @@ const MODELS_LITE_FIRST: readonly PreferredModel[] = [
   "gemini-3.1-flash-lite",
   "gemini-4-hydrogen",
   "gemini-3.1-flash-lite",
-  "gemini-4-hydrogen",
-  "gemini-3.1-flash-lite",
-  "gemini-4-hydrogen",
 ];
 
 const TEXT = {
@@ -85,10 +80,12 @@ const TEXT = {
     nextRoundBtn: "Перейти к раунду 2 (уточнить детали) →",
     finishBtn: "Получить итоговый разбор →",
     retryBtn: "Повторить сейчас",
+    quickCalcBtn: "Посчитать по правилам сайта (без ИИ)",
     loading: "ИИ анализирует профиль...",
-    retrying: "Высокая нагрузка на Google ИИ — пробую резервный канал",
+    retrying: "Пробую резервную модель",
+    traceLabel: "Попытки:",
     timeoutError:
-      "Сервер не успел ответить за отведённое время. Нажмите «Повторить сейчас».",
+      "Сервер не успел ответить вовремя. Нажмите «Повторить сейчас» или посчитайте по правилам сайта.",
     topRoutesWorld: "Оценка по всем 6 странам (в %)",
     topRoutesCountry: "Подходящие маршруты по стране (в %)",
     altVisasLabel: "Также рассмотреть:",
@@ -121,10 +118,12 @@ const TEXT = {
     nextRoundBtn: "Continue to Round 2 →",
     finishBtn: "Get Final Analysis →",
     retryBtn: "Retry now",
+    quickCalcBtn: "Calculate by site rules (no AI)",
     loading: "AI is analyzing your profile...",
-    retrying: "Google AI is busy — switching to backup channel",
+    retrying: "Trying backup model",
+    traceLabel: "Attempts:",
     timeoutError:
-      "The server did not respond in time. Please click Retry now.",
+      "The server did not respond in time. Please retry or calculate using site rules.",
     topRoutesWorld: "Match Across All 6 Countries (%)",
     topRoutesCountry: "Matching Routes for This Country (%)",
     altVisasLabel: "Also consider:",
@@ -189,12 +188,14 @@ export default function VisaAiAdvisor({
   countryName,
   answers,
   routesSummary,
+  onQuickCalculate,
 }: VisaAiAdvisorProps) {
   const t = TEXT[lang];
   const [userNote, setUserNote] = useState("");
   const [loading, setLoading] = useState(false);
   const [statusText, setStatusText] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [errorTrace, setErrorTrace] = useState<string | null>(null);
   const [lastIncludeFollowUps, setLastIncludeFollowUps] = useState(false);
   const [result, setResult] = useState<AiAdvisorResult | null>(null);
   const [round, setRound] = useState(1);
@@ -224,6 +225,7 @@ export default function VisaAiAdvisor({
 
     setLoading(true);
     setError(null);
+    setErrorTrace(null);
     setStatusText(t.loading);
     setLastIncludeFollowUps(includeFollowUps);
 
@@ -242,11 +244,12 @@ export default function VisaAiAdvisor({
     const modelSequence = preferLiteRef.current
       ? MODELS_LITE_FIRST
       : MODELS_DEFAULT;
+    const trace: string[] = [];
 
     try {
       for (let i = 0; i < modelSequence.length; i++) {
         const preferredModel = modelSequence[i];
-        const delayMs = WAVE_DELAYS_MS[i] ?? 4000;
+        const delayMs = WAVE_DELAYS_MS[i] ?? 1200;
 
         if (i > 0) {
           setStatusText(`${t.retrying} (${i + 1}/${modelSequence.length})...`);
@@ -278,12 +281,16 @@ export default function VisaAiAdvisor({
         let data: (Partial<AiAdvisorResult> & {
           error?: string;
           retryable?: boolean;
+          model?: string;
+          statusCode?: number;
         }) | null = null;
 
         try {
           data = JSON.parse(rawText) as Partial<AiAdvisorResult> & {
             error?: string;
             retryable?: boolean;
+            model?: string;
+            statusCode?: number;
           };
         } catch {
           data = null;
@@ -311,6 +318,9 @@ export default function VisaAiAdvisor({
           return;
         }
 
+        const code = data?.statusCode ?? response.status;
+        trace.push(`${data?.model ?? preferredModel} (${code})`);
+
         if (
           preferredModel === "gemini-4-hydrogen" &&
           response.status === 503
@@ -330,12 +340,16 @@ export default function VisaAiAdvisor({
           i < modelSequence.length - 1;
 
         if (!isRetryable) {
+          setErrorTrace(trace.join(" · "));
           throw new Error(errorMsg);
         }
       }
     } catch (err: unknown) {
       if (err instanceof DOMException && err.name === "AbortError") {
         return;
+      }
+      if (trace.length > 0) {
+        setErrorTrace(trace.join(" · "));
       }
       setError(
         err instanceof Error ? err.message : "Unexpected error contacting AI."
@@ -412,19 +426,37 @@ export default function VisaAiAdvisor({
       </div>
 
       {error && (
-        <div className="mt-4 flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-rose-500/30 bg-rose-500/10 p-4 text-sm leading-6 text-rose-200">
-          <span>
-            {t.errorPrefix}
-            {error}
-          </span>
-          <button
-            type="button"
-            disabled={loading}
-            onClick={() => runAdvisor(lastIncludeFollowUps)}
-            className="shrink-0 rounded-lg border border-rose-400/40 bg-rose-500/20 px-3 py-1.5 text-xs font-semibold text-rose-100 transition hover:bg-rose-500/30 disabled:opacity-50"
-          >
-            {t.retryBtn}
-          </button>
+        <div className="mt-4 rounded-2xl border border-rose-500/30 bg-rose-500/10 p-4 text-sm leading-6 text-rose-200">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <span>
+              {t.errorPrefix}
+              {error}
+            </span>
+            <div className="flex flex-wrap items-center gap-2">
+              {onQuickCalculate && (
+                <button
+                  type="button"
+                  onClick={() => onQuickCalculate(userNote)}
+                  className="shrink-0 rounded-lg bg-cyan-400 px-3 py-1.5 text-xs font-semibold text-slate-950 transition hover:bg-cyan-300"
+                >
+                  {t.quickCalcBtn}
+                </button>
+              )}
+              <button
+                type="button"
+                disabled={loading}
+                onClick={() => runAdvisor(lastIncludeFollowUps)}
+                className="shrink-0 rounded-lg border border-rose-400/40 bg-rose-500/20 px-3 py-1.5 text-xs font-semibold text-rose-100 transition hover:bg-rose-500/30 disabled:opacity-50"
+              >
+                {t.retryBtn}
+              </button>
+            </div>
+          </div>
+          {errorTrace && (
+            <p className="mt-2 text-xs text-rose-300/75">
+              {t.traceLabel} {errorTrace}
+            </p>
+          )}
         </div>
       )}
 

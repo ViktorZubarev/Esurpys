@@ -17,7 +17,10 @@ import {
   isQuestionVisible,
   normalizeWorldAnswersForCountry,
 } from "@/lib/quiz-intelligence";
-import { loadWorldProfile } from "@/lib/shared-profile";
+import {
+  extractWorldAnswersFromNote,
+  loadWorldProfile,
+} from "@/lib/shared-profile";
 import EsurpysNavigation from "@/shared/EsurpysNavigation";
 import { useLanguage } from "@/shared/LanguageProvider";
 
@@ -249,6 +252,15 @@ export default function CountryVisaQuiz({
     aiRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
   }
 
+  function applyNoteToQuiz(note: string) {
+    const worldParsed = extractWorldAnswersFromNote(note);
+    const mapped = normalizeWorldAnswersForCountry(config.id, worldParsed);
+    if (Object.keys(mapped).length > 0) {
+      setAnswers((current) => ({ ...current, ...mapped }));
+    }
+    showResultsAndScroll();
+  }
+
   function statusBadge(status: "strong" | "conditional" | "low") {
     if (status === "strong") {
       return {
@@ -360,6 +372,7 @@ export default function CountryVisaQuiz({
                 config.getRouteWarning(route.id, answers, isEnglish) ??
                 undefined,
             }))}
+            onQuickCalculate={applyNoteToQuiz}
           />
         </div>
 
