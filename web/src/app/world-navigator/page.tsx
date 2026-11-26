@@ -828,58 +828,6 @@ export default function WorldNavigatorPage() {
     });
   }
 
-  function reset() {
-    clearWorldProfile();
-    setAnswers({});
-    setStep(0);
-    setShowAll(false);
-    setShowResults(false);
-  }
-  
-  function reset() {
-    clearWorldProfile();
-    setAnswers({});
-    setStep(0);
-    setShowAll(false);
-    setShowResults(false);
-  }
-
-  function questionLabel(id: string) {
-    const question = QUESTIONS.find((item) => item.id === id);
-    if (!question) return id;
-    return lang === "ru" ? question.labelRu : question.label;
-  }
-
-  function applyNoteToWorld(note: string) {
-    const extracted = extractWorldAnswersFromNote(note);
-    setAnswers((previous) => {
-      const next: Record<string, Answer> = {
-        ...previous,
-        ...extracted,
-      };
-      saveWorldProfile(next);
-      return next;
-    });
-    setShowAll(true);
-    setShowResults(true);
-  }
-
-  const aiAdvisorBlock = (
-
-  function applyNoteToWorld(note: string) {
-    const extracted = extractWorldAnswersFromNote(note);
-    setAnswers((previous) => {
-      const next: Record<string, Answer> = {
-        ...previous,
-        ...extracted,
-      };
-      saveWorldProfile(next);
-      return next;
-    });
-    setShowAll(true);
-    setShowResults(true);
-  }
-
   const aiAdvisorBlock = (
     <div className="mx-auto mb-8 max-w-4xl">
       <VisaAiAdvisor
